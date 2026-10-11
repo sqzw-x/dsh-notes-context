@@ -113,6 +113,10 @@ dsh --profile <你的 profile> --dump-config   # 确认两层都生效
 读配置之前先看这节，会省很多猜测。**每个符号都先说明它是什么、从哪来、算出来干什么**，
 不丢一个变量名了事。
 
+> **只想知道怎么设？** 用 `thresholdTokens` 给绝对值就够，不用算：
+> `thresholdTokens: 450000` → 450K 压缩、418K 提醒、保留 20000。
+> 下面这一节是推导过程，用于理解默认值和排查意外。
+
 ### 输入量（不来自配置）
 
 | 符号 | 含义 | 从哪来 |
@@ -264,10 +268,10 @@ volatile 字段自动投影成表单（`dsh-settings` 的 `volatileForm`）。�
 |---|---|---|
 | **笔记本** | `enabled` | `true` |
 | | `maxNotebookBytes` | `16384` |
+| **自动压缩** | `thresholdTokens` | `-1`（跟随比例） |
+| | `keepRecentTokens` | `20000` |
+| | `reserveTokens` | 留空（= `max(15% × 窗口, 16384)`） |
 | **滚动提醒** | `reminderEnabled` | `true` |
-| | `reminderLeadRatio` | `0.125` |
-| | `reminderLeadMinTokens` | `8192` |
-| | `reminderLeadMaxTokens` | `32000` |
 | **滚动边界** | `rolloverText` | 见上 |
 | | `notebookSummaryMaxChars` | `2048` |
 | | `staticProvider` | `dsh-notes-context` |
@@ -278,6 +282,20 @@ volatile 字段自动投影成表单（`dsh-settings` 的 `volatileForm`）。�
 | | `historySummaryMaxChars` | `200` |
 | | `summaryTruncationMarker` | `…` |
 | | `historyBoundaryMarker` | `[ROLLOVER BOUNDARY]` |
+
+### 三个自动压缩字段
+
+对齐 omp 的形态，绝对值优先：
+
+| 字段 | 作用 |
+|---|---|
+| `thresholdTokens` | **绝对值触发点**。设 `450000` 就到 450K 压缩，窗口由运行时解析后自动折算，换模型也是 450K。填 `-1` 表示改用比例（`thresholdRatio`）。 |
+| `keepRecentTokens` | **滚动后保留的原文**，绝对值。默认 20000；取代基座的 `retainRatio`/`retainTokens`（你显式设了基座那两个，则基座优先）。 |
+| `reserveTokens` | **触发点下方的预留**。留空 = `max(15% × 窗口, 16384)`；显式设了基座的 `headroomTokens` 则基座优先。 |
+
+> **提醒位置不可配。** 它由公式推导，与 omp 一致：
+> `lead = min(32000, max(8192, floor(触发点 × 0.125)))`。
+> 所以 450K 触发 → **418,000 提醒**。想改提醒位置，只能改触发点。
 
 生效时机:绝大多数**下一次调用**就生效;`rolloverText`、`notebookSummaryMaxChars`
 和两个 `static*` 标记要**下一次滚动**才体现(它们只在写边界时被读取)。

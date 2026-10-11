@@ -52,7 +52,13 @@ import { registerNotesReminder } from './reminder.ts'
 
 export { NotesCompactionEngine } from './engine.ts'
 export { Config, type ResolvedPluginConfig } from './schema.ts'
-export { DEFAULT_ROLLOVER_TEMPLATE, baseEngineConfig, resolveReminderBand } from './config.ts'
+export {
+	DEFAULT_ROLLOVER_TEMPLATE,
+	baseEngineConfig,
+	resolveReminderBand,
+	resolveReminderLeadTokens,
+	resolveReserveTokens,
+} from './config.ts'
 export {
 	latestNotebook,
 	latestNotebookSeq,

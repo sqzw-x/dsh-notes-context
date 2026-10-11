@@ -71,6 +71,71 @@ const DEFAULT_MAX_NOTEBOOK_BYTES = 16384
  */
 const DEFAULT_NOTEBOOK_SUMMARY_MAX_CHARS = 2048
 
+/** `thresholdTokens: -1` — unset, so the rollover point follows the ratio instead. */
+export const THRESHOLD_TOKENS_UNSET = -1
+
+/**
+ * The `compaction.keepRecentTokens` default, in absolute tokens.
+ *
+ * Upstream omp keeps this many tokens of recent history verbatim
+ * (`@oh-my-pi/pi-agent-core` `compaction/compaction.ts:216`). Absolute, not a
+ * fraction: the tail is a working set the model re-reads, so its useful size
+ * does not scale with the window.
+ */
+export const DEFAULT_KEEP_RECENT_TOKENS = 20000
+
+/** omp's absolute reserve floor, used when `reserveTokens` is left unset. */
+export const DEFAULT_RESERVE_TOKENS = 16384
+
+/** Fraction of the window omp reserves, used when `reserveTokens` is left unset. */
+const RESERVE_WINDOW_FRACTION = 0.15
+
+/** omp's derivation for the approaching-rollover lead. See {@link resolveReminderLeadTokens}. */
+const LEAD_FRACTION = 0.125
+const LEAD_MIN_TOKENS = 8192
+const LEAD_MAX_TOKENS = 32000
+
+/**
+ * The approaching-rollover lead, derived exactly as omp derives it
+ * (`packages/coding-agent/src/session/speculation-lead.ts`):
+ *
+ * ```
+ * lead = min(32000, max(8192, floor(thresholdTokens × 0.125)))
+ * ```
+ *
+ * Derived rather than configured, for the reason the upstream comment gives: a
+ * fixed gap would be 200k tokens on a 1M model and useless on a 32k one, so the
+ * band scales with the threshold. The floor stops tiny windows from reminding on
+ * every step; the cap bounds how much history the rollover misses, because the
+ * retained tail grows by at most ~lead tokens between the reminder and the
+ * boundary it precedes.
+ *
+ * @param thresholdTokens - the token count at which a rollover becomes eligible.
+ * @returns the lead, in tokens.
+ */
+export function resolveReminderLeadTokens(thresholdTokens: number): number {
+	if (!Number.isFinite(thresholdTokens) || thresholdTokens <= 0) return LEAD_MIN_TOKENS
+	return Math.min(LEAD_MAX_TOKENS, Math.max(LEAD_MIN_TOKENS, Math.floor(thresholdTokens * LEAD_FRACTION)))
+}
+
+/**
+ * omp's reserve for one window: `max(floor(window × 0.15), 16384)`.
+ *
+ * The absolute floor exists because the proportional reserve would be useless on
+ * a small bundled window; the fraction exists because a fixed reserve is
+ * negligible on a 1M window. Mirrors `effectiveReserveTokens`
+ * (`@oh-my-pi/pi-agent-core` `compaction/compaction.ts:314-316`).
+ *
+ * @param contextWindow - the adapter-declared window.
+ * @param reserveTokens - an explicit reserve, or `undefined` to derive omp's default.
+ * @returns the reserve, in tokens.
+ */
+export function resolveReserveTokens(contextWindow: number, reserveTokens?: number): number {
+	if (Number.isFinite(reserveTokens) && (reserveTokens as number) >= 0) return Math.floor(reserveTokens as number)
+	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return DEFAULT_RESERVE_TOKENS
+	return Math.max(Math.floor(contextWindow * RESERVE_WINDOW_FRACTION), DEFAULT_RESERVE_TOKENS)
+}
+
 /**
  * The consumer-facing configuration shape: every plugin-owned field is a
  * VOLATILE HANDLE, not a value.
@@ -92,12 +157,32 @@ export interface Config {
 	maxNotebookBytes: Volatile<number>
 	/** Whether the approaching-rollover reminder is injected at all. */
 	reminderEnabled: Volatile<boolean>
-	/** Lead time as a fraction of the rollover threshold, before clamping. */
-	reminderLeadRatio: Volatile<number>
-	/** Lower clamp for the reminder lead, in tokens. */
-	reminderLeadMinTokens: Volatile<number>
-	/** Upper clamp for the reminder lead, in tokens. */
-	reminderLeadMaxTokens: Volatile<number>
+	/**
+	 * Absolute token count at which a rollover becomes eligible, or
+	 * {@link THRESHOLD_TOKENS_UNSET} to follow `thresholdRatio` instead.
+	 *
+	 * This is `compaction.thresholdTokens` upstream. Absolute wins over the
+	 * ratio, so one number pins the rollover point regardless of how the ratio
+	 * reads. The window it divides by is known only at step time, so the exact
+	 * trigger is locked on the first step of each window.
+	 */
+	thresholdTokens: Volatile<number>
+	/**
+	 * Tokens of recent history kept verbatim after a rollover. Absolute, like
+	 * `compaction.keepRecentTokens` upstream.
+	 *
+	 * Replaces the base engine's `retainRatio`/`retainTokens` knobs when set, so
+	 * the tail has one owner and one unit.
+	 */
+	keepRecentTokens: Volatile<number>
+	/**
+	 * Reserve held back below the trigger, or `undefined` to derive omp's
+	 * `max(15% of window, 16384)`.
+	 *
+	 * Replaces the base engine's `headroomTokens`. It is both the second ceiling
+	 * on the trigger and the safety gap the rollover leaves under the window.
+	 */
+	reserveTokens: Volatile<number | undefined>
 	/** The static rollover template emitted at a rollover boundary. */
 	rolloverText: Volatile<string>
 	/** Character cap for a static-summary body derived from the notebook. */
@@ -133,9 +218,9 @@ export interface ResolvedConfigValues {
 	enabled: boolean
 	maxNotebookBytes: number
 	reminderEnabled: boolean
-	reminderLeadRatio: number
-	reminderLeadMinTokens: number
-	reminderLeadMaxTokens: number
+	thresholdTokens: number
+	keepRecentTokens: number
+	reserveTokens: number | undefined
 	rolloverText: string
 	notebookSummaryMaxChars: number
 	staticProvider: string
@@ -159,13 +244,23 @@ export const Config: Schema<ResolvedConfigValues, Config> = Schema.object({
 		.default(DEFAULT_MAX_NOTEBOOK_BYTES)
 		.description('Maximum notebook size in UTF-8 bytes.').volatile(),
 	reminderEnabled: Schema.boolean().default(true).description('Inject an approaching-rollover reminder.').volatile(),
-	reminderLeadRatio: Schema.number()
+	thresholdTokens: Schema.number()
+		.min(THRESHOLD_TOKENS_UNSET)
+		.default(THRESHOLD_TOKENS_UNSET)
+		.description(
+			'Absolute token count at which a rollover becomes eligible, or -1 to follow thresholdRatio. Absolute wins over the ratio.',
+		).volatile(),
+	keepRecentTokens: Schema.number()
+		.min(1)
+		.default(DEFAULT_KEEP_RECENT_TOKENS)
+		.description(
+			'Tokens of recent history kept verbatim after a rollover. Absolute; replaces retainRatio/retainTokens.',
+		).volatile(),
+	reserveTokens: Schema.number()
 		.min(0)
-		.max(1)
-		.default(0.125)
-		.description('Reminder lead time as a fraction of the rollover threshold.').volatile(),
-	reminderLeadMinTokens: Schema.number().min(0).default(8192).description('Lower clamp for the reminder lead, in tokens.').volatile(),
-	reminderLeadMaxTokens: Schema.number().min(0).default(32000).description('Upper clamp for the reminder lead, in tokens.').volatile(),
+		.description(
+			'Reserve held back below the rollover trigger, in tokens. Leave blank for the default: 15% of the model window, never below 16384.',
+		).volatile(),
 	rolloverText: Schema.string().default(DEFAULT_ROLLOVER_TEMPLATE).description('Static rollover template text.').volatile(),
 	notebookSummaryMaxChars: Schema.number()
 		.min(0)
@@ -200,22 +295,6 @@ export const Config: Schema<ResolvedConfigValues, Config> = Schema.object({
  */
 export const NotesConfig: Schema<ResolvedConfigValues, Config> = Config
 
-/**
- * The subset of configuration {@link resolveReminderBand} needs.
- *
- * **Plain numbers, not handles.** This helper is deliberately pure and takes its
- * inputs by value so it stays a function of its arguments: callers (including the
- * reminder and the unit tests) read `.get()` themselves and pass the numbers in.
- */
-export interface ReminderBandConfig {
-	/** Lead fraction of the threshold. */
-	reminderLeadRatio: number
-	/** Lower clamp for the lead, in tokens. */
-	reminderLeadMinTokens: number
-	/** Upper clamp for the lead, in tokens. */
-	reminderLeadMaxTokens: number
-}
-
 /** Half-open token band `[start, end)` in which the reminder should fire. */
 export interface ReminderBand {
 	/** Token count at which the band opens. */
@@ -225,46 +304,26 @@ export interface ReminderBand {
 }
 
 /**
- * Coerce one clamp/ratio value to a usable finite number.
- *
- * A field that failed schema validation arrives `undefined`, and an operator may
- * also patch the resolved object directly. The reminder runs inside a step
- * boundary and must never throw there, so a missing or non-finite value degrades
- * to `0` instead of crashing the step.
- *
- * @param value - the candidate field value.
- * @returns the value when finite, otherwise `0`.
- */
-function finiteOr(value: number | undefined): number {
-	return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-/**
  * Derive the reminder band from a rollover threshold.
  *
- * `lead = clamp(round(thresholdTokens * cfg.reminderLeadRatio), min, max)`, and
- * the band opens `lead` tokens before the threshold — but never earlier than
- * `0`, so a lead larger than the threshold yields `{ start: 0, end: threshold }`
- * rather than a negative window. `min` and `max` are ordered defensively, so an
- * inverted pair still produces a usable band.
+ * The band is `[threshold − lead, threshold)`, where `lead` is DERIVED by
+ * {@link resolveReminderLeadTokens} rather than configured — upstream exposes no
+ * setting for it either. There is therefore no knob to clamp and no inverted
+ * pair to defend against: the lead is always positive and never exceeds the
+ * threshold, because the fraction is ≤ 1 and the floor is applied to a
+ * non-negative threshold.
  *
  * Pure: no I/O, no clock, no hidden state, so it is safe to call from a render
  * or decision path. It never throws: a non-finite or non-positive
- * `thresholdTokens` yields the empty band `{ start: 0, end: 0 }`, and a missing
- * or non-finite field degrades to `0` for that field (see {@link finiteOr}).
+ * `thresholdTokens` yields the empty band `{ start: 0, end: 0 }`.
  *
  * @param thresholdTokens - token count at which a rollover becomes eligible.
- * @param cfg - the three clamp/ratio fields.
- * @returns the half-open band, with `start` never negative.
+ * @returns the half-open band.
  */
-export function resolveReminderBand(thresholdTokens: number, cfg: ReminderBandConfig): ReminderBand {
+export function resolveReminderBand(thresholdTokens: number): ReminderBand {
 	if (!Number.isFinite(thresholdTokens) || thresholdTokens <= 0) return { start: 0, end: 0 }
 	const end = Math.round(thresholdTokens)
-	const ratio = finiteOr(cfg?.reminderLeadRatio)
-	const low = finiteOr(cfg?.reminderLeadMinTokens)
-	const high = finiteOr(cfg?.reminderLeadMaxTokens)
-	const lead = Math.min(Math.max(Math.round(thresholdTokens * ratio), low), Math.max(low, high))
-	return { start: Math.max(0, end - lead), end }
+	return { start: Math.max(0, end - resolveReminderLeadTokens(end)), end }
 }
 
 /**
@@ -296,5 +355,56 @@ export function baseEngineConfig(config: object): BasicCompactionConfig {
 		if (isVolatile(value)) continue
 		base[key] = value
 	}
+	/* This plugin's own three fields own the same ground as three fields of the
+	 * base backend, and the base backend must never receive this plugin's key
+	 * names (`validateKeys` rejects unknown keys at boot). So they are translated
+	 * here.
+	 *
+	 * `keepRecentTokens` → `retainTokens`: both are absolute recent-history
+	 * budgets with the same `< thresholdTokens` constraint, so the base backend's
+	 * own retention path does the work; this plugin owns the unit and the name.
+	 *
+	 * `reserveTokens` → `headroomTokens`: the same "held back below the trigger"
+	 * quantity.
+	 *
+	 * **An explicitly configured base key wins.** These fields carry defaults, so
+	 * without this rule a profile that set `retainTokens` (or `headroomTokens`,
+	 * or `retainRatio`) directly would be silently overridden by a default it
+	 * never asked for. The translation therefore fires only when the base key is
+	 * absent — which is also what keeps a profile written before these fields
+	 * existed working unchanged.
+	 *
+	 * `retainRatio` suppresses the retention translation for the same reason:
+	 * `retainTokens` and `retainRatio` are mutually exclusive at the base layer,
+	 * and a profile that chose the ratio form must keep it.
+	 *
+	 * `thresholdTokens` is deliberately NOT translated here: an absolute trigger
+	 * needs the model's window, which is unknown at construction. The engine
+	 * locks it on the first step of each window instead. */
+	if (base['retainTokens'] === undefined && base['retainRatio'] === undefined) {
+		const keep = readPlain(record, 'keepRecentTokens')
+		if (typeof keep === 'number' && Number.isFinite(keep)) base['retainTokens'] = keep
+	}
+	if (base['headroomTokens'] === undefined) {
+		const reserve = readPlain(record, 'reserveTokens')
+		if (typeof reserve === 'number' && Number.isFinite(reserve)) base['headroomTokens'] = reserve
+	}
 	return base as BasicCompactionConfig
+}
+
+/**
+ * Read one field as a plain value, unwrapping a volatile handle if present.
+ *
+ * The composed config is resolved before it reaches either half, so a field here
+ * is normally already plain; the handle case exists because the same helper is
+ * unit-tested against a raw resolved shape. A handle is read through `.get()`
+ * rather than returned, so the caller never receives the handle object.
+ *
+ * @param record - the config record under inspection.
+ * @param key - the field name.
+ * @returns the plain value, or `undefined` when the field is absent.
+ */
+function readPlain(record: Record<string, unknown>, key: string): unknown {
+	const value = record[key]
+	return isVolatile(value) ? (value as { get: () => unknown }).get() : value
 }

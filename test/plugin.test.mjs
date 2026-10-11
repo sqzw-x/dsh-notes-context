@@ -26,6 +26,8 @@ import {
 	notebookBlock,
 	notebookBytes,
 	resolveReminderBand,
+	resolveReminderLeadTokens,
+	resolveReserveTokens,
 	writeNotebook,
 } from '../lib/index.js'
 
@@ -72,43 +74,51 @@ test('notebookBytes measures UTF-8 bytes, not UTF-16 code units', () => {
 
 // ---------------------------------------------------------------- reminder band
 
-test('resolveReminderBand clamps the lead between the configured bounds', () => {
-	// `resolveReminderBand` is deliberately a pure function of plain numbers, so
-	// the volatile handles are unwrapped here rather than inside it.
-	const raw = notesConfig()
-	const cfg = {
-		reminderLeadRatio: raw.reminderLeadRatio.get(),
-		reminderLeadMinTokens: raw.reminderLeadMinTokens.get(),
-		reminderLeadMaxTokens: raw.reminderLeadMaxTokens.get(),
+test('resolveReminderBand derives the lead with the upstream formula', () => {
+	// The lead is DERIVED, not configured: min(32000, max(8192, floor(threshold * 0.125))).
+	// 800k -> raw 100k -> capped at the 32000 ceiling.
+	assert.deepEqual(resolveReminderBand(800_000), { start: 768_000, end: 800_000 })
+	// A small threshold clamps up to the 8192 floor: 10k -> raw 1250 -> 8192.
+	assert.deepEqual(resolveReminderBand(10_000), { start: 1_808, end: 10_000 })
+	// The headline example: an absolute 450k trigger reminds at 418k.
+	assert.deepEqual(resolveReminderBand(450_000), { start: 418_000, end: 450_000 })
+	// The band scales with the threshold, and the lead never exceeds it.
+	for (const threshold of [200_000, 850_000, 1_000_000, 2_000_000]) {
+		const band = resolveReminderBand(threshold)
+		assert.ok(band.start >= 0, `band start stays non-negative at ${threshold}`)
+		assert.ok(band.start < band.end, `band is non-empty at ${threshold}`)
 	}
-	// Defaults: ratio 0.125, min 8192, max 32000.
-	// 800k threshold -> raw lead 100k -> clamped down to the 32000 max.
-	assert.deepEqual(resolveReminderBand(800_000, cfg), { start: 768_000, end: 800_000 })
-	// A small threshold clamps up to the 8192 minimum.
-	assert.deepEqual(resolveReminderBand(10_000, cfg), { start: 1_808, end: 10_000 })
 })
 
 test('resolveReminderBand is the empty band for a non-positive threshold', () => {
-	const cfg = notesConfig()
-	assert.deepEqual(resolveReminderBand(0, cfg), { start: 0, end: 0 })
-	assert.deepEqual(resolveReminderBand(-5, cfg), { start: 0, end: 0 })
-	assert.deepEqual(resolveReminderBand(Number.NaN, cfg), { start: 0, end: 0 })
-	assert.deepEqual(resolveReminderBand(Number.POSITIVE_INFINITY, cfg), { start: 0, end: 0 })
+	assert.deepEqual(resolveReminderBand(0), { start: 0, end: 0 })
+	assert.deepEqual(resolveReminderBand(-5), { start: 0, end: 0 })
+	assert.deepEqual(resolveReminderBand(Number.NaN), { start: 0, end: 0 })
+	assert.deepEqual(resolveReminderBand(Number.POSITIVE_INFINITY), { start: 0, end: 0 })
 })
 
-test('resolveReminderBand never opens below zero', () => {
-	// A raw config object, not a schema-validated one: ratio > 1 is deliberately
-	// out of schema range, and the point here is that a lead larger than the
-	// threshold cannot produce a negative window.
-	const cfg = { reminderLeadRatio: 10, reminderLeadMinTokens: 0, reminderLeadMaxTokens: 1000 }
-	assert.deepEqual(resolveReminderBand(50, cfg), { start: 0, end: 50 })
+test('resolveReminderLeadTokens matches the upstream derivation at its boundaries', () => {
+	// Below the floor's crossover the lead is flat at 8192...
+	assert.equal(resolveReminderLeadTokens(100), 8192)
+	assert.equal(resolveReminderLeadTokens(65_535), 8192)
+	// ...then follows the fraction until the ceiling takes over.
+	assert.equal(resolveReminderLeadTokens(200_000), 25_000)
+	assert.equal(resolveReminderLeadTokens(450_000), 32_000)
+	assert.equal(resolveReminderLeadTokens(1_000_000), 32_000)
+	assert.equal(resolveReminderLeadTokens(Number.NaN), 8192)
 })
 
-test('resolveReminderBand never throws on a missing or unusable field', () => {
-	// It runs inside a step boundary, so being total matters more than being
-	// precise: a broken config must degrade, not abort the step.
-	assert.deepEqual(resolveReminderBand(50, {}), { start: 50, end: 50 })
-	assert.deepEqual(resolveReminderBand(50, { reminderLeadRatio: Number.NaN }), { start: 50, end: 50 })
+test('resolveReserveTokens derives the upstream reserve unless one is set', () => {
+	// 15% of the window, floored at 16384.
+	assert.equal(resolveReserveTokens(1_000_000), 150_000)
+	assert.equal(resolveReserveTokens(200_000), 30_000)
+	assert.equal(resolveReserveTokens(32_000), 16_384)
+	assert.equal(resolveReserveTokens(100_000), 16_384)
+	// An explicit reserve wins outright, including 0.
+	assert.equal(resolveReserveTokens(1_000_000, 65_536), 65_536)
+	assert.equal(resolveReserveTokens(1_000_000, 0), 0)
+	// An unusable window still yields the absolute floor rather than NaN.
+	assert.equal(resolveReserveTokens(Number.NaN), 16_384)
 })
 
 // ---------------------------------------------------------------- schema
@@ -364,9 +374,9 @@ test('documented defaults are unchanged and readable through .get()', () => {
 	assert.equal(resolved.maxNotebookBytes.get(), 16384)
 	assert.equal(resolved.reminderEnabled.get(), true)
 	assert.equal(resolved.enabled.get(), true)
-	assert.equal(resolved.reminderLeadRatio.get(), 0.125)
-	assert.equal(resolved.reminderLeadMinTokens.get(), 8192)
-	assert.equal(resolved.reminderLeadMaxTokens.get(), 32000)
+	assert.equal(resolved.thresholdTokens.get(), -1)
+	assert.equal(resolved.keepRecentTokens.get(), 20000)
+	assert.equal(resolved.reserveTokens.get(), undefined)
 	assert.equal(resolved.notebookSummaryMaxChars.get(), 2048)
 	assert.equal(resolved.historyDefaultLimit.get(), 200)
 	assert.equal(resolved.maxHistoryEntries.get(), 500)
@@ -404,6 +414,31 @@ test('a volatile commit is visible to the next read through the same handle', ()
 })
 
 // ---------------------------------------------------------------- base policy plumbing
+
+test('baseEngineConfig translates this plugin\u2019s three fields into base keys', () => {
+	// The base backend rejects unknown keys at boot, so these three must never
+	// arrive under their own names. keepRecentTokens and reserveTokens map onto
+	// the base keys that own the same ground.
+	const mapped = baseEngineConfig(notesConfig({ keepRecentTokens: 4321, reserveTokens: 1234 }))
+	assert.equal(mapped.retainTokens, 4321)
+	assert.equal(mapped.headroomTokens, 1234)
+	const known = new Set(Object.keys(BasicCompactionEngine.Config.dict))
+	for (const key of Object.keys(mapped)) {
+		assert.ok(known.has(key), `${key} is not a base engine key`)
+	}
+	// thresholdTokens is deliberately NOT translated: an absolute trigger needs
+	// the model window, which is unknown at construction.
+	assert.equal('thresholdTokens' in mapped, false)
+})
+
+test('baseEngineConfig leaves the base knobs alone when this plugin\u2019s are unset', () => {
+	// A profile that configured the base knobs directly must keep working: the
+	// mapping only fires when this plugin's field actually carries a value.
+	const untouched = baseEngineConfig(notesConfig({ headroomTokens: 4096, retainRatio: 0.2 }))
+	assert.equal(untouched.headroomTokens, 4096)
+	assert.equal(untouched.retainRatio, 0.2)
+	assert.equal('retainTokens' in untouched, false)
+})
 
 test('baseEngineConfig forwards user-set base knobs as plain values, excluding volatile ones', () => {
 	const base = baseEngineConfig(notesConfig({ thresholdRatio: 0.55, retainTokens: 4321, auto: false }))

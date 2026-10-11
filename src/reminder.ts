@@ -237,10 +237,17 @@ async function planReminder(
 	const tokens = ctx.tokenMeter.measure(session).totalTokens
 	const key = `${state.boundary}|${routed.provider}/${routed.model}`
 	if (state.thresholdKey !== key) {
-		const policy = readPressurePolicy(source, routed.provider, routed.model)
 		try {
 			const info = await ctx.llm.resolveModelInfo(routed.provider, routed.model, signal)
 			const contextWindow = info.context?.contextWindow
+			if (contextWindow !== undefined) {
+				/* Lock the absolute trigger BEFORE reading the policy the band
+				 * derives from, so the reminder and the backend judge the same
+				 * number. A profile that set only `thresholdRatio` is unaffected:
+				 * the lock is a no-op without `thresholdTokens`. */
+				lockAbsoluteTrigger(ctx, contextWindow, routed)
+			}
+			const policy = readPressurePolicy(source, routed.provider, routed.model)
 			state.thresholdTokens =
 				contextWindow === undefined
 					? undefined
@@ -262,15 +269,35 @@ async function planReminder(
 	const thresholdTokens = state.thresholdTokens
 	if (thresholdTokens === undefined) return undefined
 
-	/* Read the three lead fields at the point of use: each is a live handle, so a
-	 * settings edit applies to the very next band evaluation. */
-	const band = resolveReminderBand(thresholdTokens, {
-		reminderLeadRatio: config.reminderLeadRatio.get(),
-		reminderLeadMinTokens: config.reminderLeadMinTokens.get(),
-		reminderLeadMaxTokens: config.reminderLeadMaxTokens.get(),
-	})
+	/* The lead is derived from the threshold, exactly as upstream derives it, so
+	 * there is nothing to read live here and no field to clamp. */
+	const band = resolveReminderBand(thresholdTokens)
 	if (tokens < band.start || tokens >= band.end) return undefined
 	return state.boundary
+}
+
+/**
+ * Ask the mounted backend to pin its absolute trigger for this window.
+ *
+ * Best-effort by design: the backend narrows structurally, so a backend that
+ * does not expose {@link NotesCompactionEngine.lockThreshold} simply keeps its
+ * ratio, and a lock that throws must not abort the step that is being admitted.
+ *
+ * @param ctx - context holding the optional compaction service.
+ * @param contextWindow - the adapter-declared window, in tokens.
+ * @param routed - the routed provider and model whose window this is.
+ */
+function lockAbsoluteTrigger(
+	ctx: Context,
+	contextWindow: number,
+	routed: { provider: string; model: string },
+): void {
+	const service = ctx.get('compaction') as { lockThreshold?: (window: number, target: unknown) => boolean } | undefined
+	try {
+		service?.lockThreshold?.(contextWindow, routed)
+	} catch (error) {
+		ctx.logger.warn('notes-context: cannot lock the absolute rollover trigger: %o', error)
+	}
 }
 
 /**

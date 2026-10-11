@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- **`thresholdTokens`** — an absolute rollover trigger, matching
+  `compaction.thresholdTokens` upstream. It wins over `thresholdRatio`, so one
+  number pins the trigger and it stays pinned across models: the model's window is
+  resolved at runtime and the ratio is derived from it, instead of asking the
+  profile author to divide by a window they cannot see.
+- **`keepRecentTokens`** — the verbatim recent-history budget, absolute, matching
+  `compaction.keepRecentTokens` upstream (default 20000). Replaces the base
+  backend's `retainRatio`/`retainTokens` framing; an explicitly configured base key
+  still wins, so existing profiles are unaffected.
+- **`reserveTokens`** — the reserve held below the trigger, defaulting to omp's
+  `max(15% of window, 16384)` derivation (`effectiveReserveTokens`). Replaces
+  `headroomTokens`.
+
+### Removed
+
+- **`reminderLeadRatio`, `reminderLeadMinTokens`, `reminderLeadMaxTokens`.** The
+  lead was never a user-facing setting upstream: omp derives it with an exported
+  pure function and says so — "derived from the threshold instead of a second
+  user-facing knob so the band scales with the window". Exposing three knobs to
+  configure one derived number was this port's invention, and it made a two-number
+  decision (where the trigger is, where the reminder fires) look like a
+  three-layer calculation. The lead now follows omp exactly:
+  `min(32000, max(8192, floor(threshold × 0.125)))`, so a 450k trigger reminds at
+  418k.
+
 ### Documentation
 
 - **New section: how the thresholds are computed.** Every symbol is defined before it is

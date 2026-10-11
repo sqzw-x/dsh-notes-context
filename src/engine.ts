@@ -174,7 +174,7 @@ import type { BasicCompactionConfig } from '@deepseek-ai/dsh-compaction-basic'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ContentBlock, Message, TokenUsage, ToolSchema } from '@deepseek-ai/dsh-llm'
-import { baseEngineConfig, type Config as NotesLiveConfig } from './config.ts'
+import { baseEngineConfig, resolveReserveTokens, type Config as NotesLiveConfig } from './config.ts'
 import { notebookBlock } from './inject.ts'
 import { latestNotebook, type NotebookState } from './notebook.ts'
 
@@ -440,6 +440,55 @@ export class NotesCompactionEngine extends BasicCompactionEngine {
 	constructor(ctx: Context, config: NotesCompactionEngineConfig) {
 		super(ctx, baseEngineConfig(config))
 		this.notes = config
+	}
+
+	/** The last `provider/model` whose absolute trigger was locked into {@link config}. */
+	private lockedTarget: string | undefined
+
+	/**
+	 * Pin the absolute rollover trigger for one routed target.
+	 *
+	 * `thresholdTokens` is an absolute token count, but the backend's trigger is
+	 * a ratio of the model's window, and the window is declared by the adapter and
+	 * only resolvable at runtime. So the ratio is computed here, once per routed
+	 * target, and swapped into the base backend's resolved config — the same
+	 * object reference the backend re-reads on every step, so the very next
+	 * pressure check uses it. `headroomTokens` is derived from the same number so
+	 * the reserve cannot clamp the trigger the user asked for.
+	 *
+	 * The base config object is deeply frozen, so assignments into it cannot
+	 * work; the reference itself is what gets replaced.
+	 *
+	 * Failure is never fatal: an unresolved window leaves the configured ratio in
+	 * force, which is exactly what a profile that only set `thresholdRatio`
+	 * expects. The attempt is remembered per target so a window that never
+	 * resolves is not re-resolved on every step.
+	 *
+	 * @param contextWindow - the adapter-declared window, in tokens.
+	 * @param target - the routed provider and model whose window this is.
+	 * @returns whether an absolute trigger was locked.
+	 */
+	lockThreshold(contextWindow: number, target: { provider: string; model: string }): boolean {
+		const trigger = this.notes.thresholdTokens?.get()
+		if (trigger === undefined || !Number.isFinite(trigger) || trigger <= 0) return false
+		if (!Number.isInteger(contextWindow) || contextWindow <= 0) return false
+		const key = `${target.provider}/${target.model}`
+		if (this.lockedTarget === key) return true
+		/* A trigger at or past the window can never fire before the request
+		 * overflows, so fall back to the window less the reserve — mirroring the
+		 * base backend's own guard. */
+		const reserve = resolveReserveTokens(contextWindow, this.notes.reserveTokens?.get())
+		const desired = Math.min(trigger, contextWindow - reserve)
+		if (desired <= 0) return false
+		const next = {
+			...this.config,
+			thresholdRatio: desired / contextWindow,
+			headroomTokens: Math.max(0, contextWindow - desired),
+		}
+		;(this as { config: unknown }).config = next
+		this.ctx.logger.debug('notes-context: rollover trigger locked at %d tokens (window %d)', desired, contextWindow)
+		this.lockedTarget = key
+		return true
 	}
 
 	/**
