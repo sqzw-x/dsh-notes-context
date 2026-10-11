@@ -4,6 +4,12 @@
 
 ### Added
 
+- **The runtime packages typecheck depends on are now devDependencies.** Every
+  `@deepseek-ai/*` import is a peer and marked optional, and dsh is a desktop app that is not
+  installed on a CI runner, so a fresh checkout had none of them: the first CI run failed
+  with `Cannot find module '@deepseek-ai/cordis'` and 30 more. The ten packages the sources
+  import are now pinned in `devDependencies`, which is also how the sibling `dsh-alerts`
+  keeps its CI green.
 - **CI and publish workflows.** `ci.yml` runs typecheck, tests and the artifact contract on
   Node 22 and 24 for every push and pull request. `publish.yml` publishes to npm on a `v*`
   tag, after verifying the tag matches the `package.json` version and re-running the same
