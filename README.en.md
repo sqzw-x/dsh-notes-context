@@ -69,7 +69,7 @@ context_history { from: 0, to: 50, raw: true }  → raw text
 ## Configuration
 
 The commonly used keys are below. All fields are on the settings page; derivations are in
-[Internals](docs/INTERNALS.md).
+[Internals](https://github.com/sqzw-x/dsh-notes-context/blob/main/docs/INTERNALS.md).
 
 | Key | Default | Description |
 |---|---|---|
@@ -116,7 +116,7 @@ The bundle contains two patch rows: it disables `compaction-basic` and mounts th
 - **A free boundary is not a free feature.** Writing the notebook is a tool call; the cost
   moves earlier rather than away.
 - **DSH's own compaction settings are neither visible nor changeable here** — they live in
-  the config file and need a dsh restart (why: [Internals](docs/INTERNALS.md)).
+  the config file and need a dsh restart (why: [Internals](https://github.com/sqzw-x/dsh-notes-context/blob/main/docs/INTERNALS.md)).
 - Sessions with a restricted toolset (subagents) that cannot call `context_notes` degrade to
   a notebook-less rollover.
 
@@ -128,6 +128,19 @@ npm run typecheck
 npm run build
 npm test
 ```
+
+## Publishing
+
+Pushing a `v*` tag publishes to npm through GitHub Actions (the tag must match the
+`package.json` version):
+
+```sh
+npm version patch          # or minor / major; tags as well
+git push --follow-tags
+```
+
+The first publish needs an `NPM_TOKEN` secret (an npm Automation token) in the repository
+settings.
 
 ## License
 

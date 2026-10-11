@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # tsdown 需要 Node 22+；这里同时覆盖 LTS 与当前版。
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: 产物契约（加载壳 + 导出）
+        run: |
+          node -e "
+          const fs = require('node:fs');
+          const c = fs.readFileSync('lib/client.js', 'utf8');
+          if (!c.startsWith('window.__ModuleLoader__.load({')) throw new Error('bundle 缺少 __ModuleLoader__ 包装');
+          if (!/exports\.apply = apply;/.test(c)) throw new Error('bundle 未导出 apply');
+          "
+          node --input-type=module -e "
+          const m = await import('./lib/index.js');
+          if (typeof m.apply !== 'function') throw new Error('lib/index.js 未导出 apply');
+          if (m.name !== 'notes-context') throw new Error('插件 name 不是 notes-context');
+          if (typeof m.resolveReminderBand !== 'function') throw new Error('lib/index.js 未导出 resolveReminderBand');
+          "
+      - name: 打包产物自检（npm publish 会包含哪些文件）
+        run: npm pack --dry-run

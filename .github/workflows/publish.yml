@@ -1,0 +1,45 @@
+name: Publish
+
+# 打一个 v* 标签即发布。发布前先跑完整校验，校验不过不会发出去。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 只做校验与打包，不真正发布
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance（供应链证明）
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: 校验标签与 package.json 版本一致
+        if: github.event_name == 'push'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::标签 v$tag 与 package.json 的版本 $pkg 不一致"; exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: 打包预览
+        run: npm pack --dry-run
+      - name: 发布
+        # 打标签时发布；手动触发只在 dry-run 时校验与打包，不发。
+        if: ${{ github.event_name == 'push' }}
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

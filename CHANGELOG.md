@@ -4,6 +4,23 @@
 
 ### Added
 
+- **CI and publish workflows.** `ci.yml` runs typecheck, tests and the artifact contract on
+  Node 22 and 24 for every push and pull request. `publish.yml` publishes to npm on a `v*`
+  tag, after verifying the tag matches the `package.json` version and re-running the same
+  checks, with `--provenance` for a supply-chain attestation.
+- **`package-lock.json`**, so CI installs with `npm ci` and resolves the same tree every run.
+- **Repository metadata**: `repository`, `homepage`, `bugs` and `publishConfig.access` in
+  `package.json`, so a publish is public and links back to the source.
+- **`docs/` now ships in the tarball.** `npm pack` omitted it, which would have left the
+  README's 内部机制 links dead on npm.
+
+### Changed
+
+- **README links to the internals doc use absolute URLs.** A relative `docs/INTERNALS.md`
+  resolves on GitHub but not on npm, where the README is the package home page.
+- **`package.json` description** follows the renamed feature: "notes-backed context
+  compression", not "windows".
+
 - **`thresholdTokens`** — an absolute rollover trigger, matching
   `compaction.thresholdTokens` upstream. It wins over `thresholdRatio`, so one
   number pins the trigger and it stays pinned across models: the model's window is

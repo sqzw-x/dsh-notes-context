@@ -60,7 +60,7 @@ context_history { from: 0, to: 50, raw: true }  → 原文
 
 ## 配置
 
-常用配置项如下。完整字段见设置页，推导过程见 [内部机制](docs/INTERNALS.md)。
+常用配置项如下。完整字段见设置页，推导过程见 [内部机制](https://github.com/sqzw-x/dsh-notes-context/blob/main/docs/INTERNALS.md)。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
@@ -100,7 +100,7 @@ dsh --profile <profile> --dump-config   # 确认两层都生效
 - **笔记本质量由模型决定。** 插件不自动补写、不代为总结。模型未记录的信息需从原文回读。
 - **每次写入都是一条留在上下文里的消息。** 频繁重写会增大上下文。
 - **边界零开销 ≠ 全程零开销。** 写笔记本本身是一次工具调用，成本前移而非消除。
-- **DSH 自身的压缩配置不可见、不可改**，只能改配置文件并重启 dsh（原因见 [内部机制](docs/INTERNALS.md)）。
+- **DSH 自身的压缩配置不可见、不可改**，只能改配置文件并重启 dsh（原因见 [内部机制](https://github.com/sqzw-x/dsh-notes-context/blob/main/docs/INTERNALS.md)）。
 - 受限工具集的会话（如子代理）若无法调用 `context_notes`，退化为无笔记本的滚动。
 
 ## 开发
@@ -111,6 +111,17 @@ npm run typecheck
 npm run build
 npm test
 ```
+
+## 发布
+
+打 `v*` 标签触发 GitHub Actions 发布到 npm（标签版本须与 `package.json` 一致）：
+
+```sh
+npm version patch          # 或 minor / major，同时打标签
+git push --follow-tags
+```
+
+首次发布前需在仓库 Settings → Secrets 配置 `NPM_TOKEN`（npm 的 Automation token）。
 
 ## 许可
 
