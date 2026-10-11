@@ -10,10 +10,18 @@ English | [简体中文](README.md)
 
 ## The problem
 
-DSH's default compaction spends an **extra LLM call** when context pressure crosses a
-threshold, summarizing the older span. Three costs follow: **latency** at the moment you
-most want to keep working, **unpredictability** because summary quality is whatever the
-model produces, and **loss** because the original text is gone from the model's view.
+Here is how DSH's built-in compaction works. When the context window is nearly full, it
+asks the model to summarize the older history, then replaces that history with the summary.
+
+That causes three problems.
+
+It is slow. You wait for the summary call, and you are waiting at the exact moment you
+wanted to keep working.
+
+It is unreliable. How good the summary is depends on how the model performs this time.
+
+It loses information. By default the model can no longer see the text that was replaced —
+only the summary.
 
 This plugin takes another route: **don't summarize, take notes.**
 
@@ -26,34 +34,44 @@ This plugin takes another route: **don't summarize, take notes.**
 
 ## How it works
 
-**The notebook (`context_notes`)** — the model records task state, decisions, changed
-files, blockers and next steps into a persistent notebook:
+**The notebook (`context_notes`)**
+
+As it works, the model records task state, settled decisions, which files it changed, what
+is blocking it, and what comes next. The notebook lives with the session and survives a
+window rollover.
 
 ```
-context_notes                    → read it
-context_notes { text: "..." }    → replace it wholesale (not append)
+context_notes                    → read the notebook
+context_notes { text: "..." }    → replace it whole (not append)
 context_notes { text: "" }       → clear it
 ```
 
-The cap is 16 KiB (UTF-8 bytes), enforced **before** anything is stored, so an over-long
-write never leaves a partial record.
+The cap is 16 KiB (UTF-8 bytes). A write past the cap is refused outright rather than
+stored in part.
 
-**The reminder (once per window)** — as pressure nears the trigger, the plugin injects one
-model-visible reminder, so the model updates the notebook before details fall out of the
-window. The reminder is **not load-bearing**: compaction happens whether or not the model
-acts on it. What it buys is **fidelity**, not savings.
+**The reminder (once per window)**
 
-**The rollover (zero model calls)** — at the trigger, the plugin reuses the built-in
-compaction's pressure and retention policy and replaces **only the summary text** with a
-static template plus the notebook verbatim. `summarize()` never calls a model.
+As the context nears the trigger, the plugin sends the model one reminder: update the
+notebook now, while the details are still in front of you.
 
-**Raw history read-back (`context_history`)** — a rollover only **shadows** the history it
-replaces; it never deletes it, because the log is append-only. The model can read the
-original record back by stable `seq`:
+The reminder is **optional**. Ignore it and compaction happens anyway. What it buys is
+fidelity, not savings.
+
+**The rollover (no model call)**
+
+At the trigger, the plugin reuses the built-in compaction's retention policy but swaps out
+the summarizing step: instead of asking the model for a summary, it writes a fixed
+transition note followed by the current notebook. No model call is made.
+
+**Raw history read-back (`context_history`)**
+
+A rollover only removes the replaced history from what the model can see; it does not
+delete it, because the log is append-only. When the model needs an old detail, it can read
+the original text back by `seq`:
 
 ```
-context_history                                 → index
-context_history { from: 120, to: 200 }          → exact range
+context_history                                 → full index
+context_history { from: 120, to: 200 }          → a range
 context_history { from: 0, to: 50, raw: true }  → raw text
 ```
 
@@ -69,14 +87,15 @@ Four keys cover most uses. Every field is on the settings page; the derivations 
 | `reserveTokens` | blank | Room held below the trigger. Blank means 15% of the window, never below 16384 |
 | `reminderEnabled` | `true` | Whether the reminder is injected at all |
 
-> **The reminder position cannot be configured.** It is bound to the trigger:
+> **The reminder position has no setting.** It is tied to the trigger by a formula:
 > `lead = min(32000, max(8192, floor(trigger × 0.125)))`.
-> So `thresholdTokens: 450000` reminds at **418,000** — 32,000 before the trigger. To move
-> the reminder, move the trigger.
+> With `thresholdTokens: 450000`, the reminder lands at **418,000** — 32,000 before the
+> trigger. To move the reminder, move the trigger.
 
-Changes apply **immediately**, from the settings page or the config file. The exception is
-`rolloverText`, `notebookSummaryMaxChars` and the two `static*` labels: those are read only
-when a boundary is written, so they apply at the **next rollover**.
+Changes apply **immediately**, whether you edit the settings page or the config file. The
+exception is `rolloverText`, `notebookSummaryMaxChars` and the two `static*` labels: those
+are read only while a boundary is being written, so they take effect at the **next
+rollover**.
 
 ```yaml
 - id: notes-context
@@ -96,13 +115,13 @@ The bundle ships two patch rows: it disables `compaction-basic` and mounts this 
 
 ## Honest limitations
 
-- **Notebook quality and timeliness are entirely the model's responsibility.** The plugin
-  never backfills or summarizes for you. If the model writes nothing, details are only
-  recoverable from raw history.
-- **Every notebook write is a message that stays in the conversation**, so frequent
-  rewrites grow the context.
-- **A zero-cost boundary is not a zero-cost feature.** Writing the notebook is a tool call;
-  the cost moved earlier rather than away.
+- **Notebook quality is entirely up to the model.** The plugin never backfills a notebook
+  or writes one for you. If the model records nothing useful, details are left in the raw
+  history and have to be recovered from there.
+- **Every notebook write stays in the conversation as a message**, so rewriting it often
+  makes the context grow.
+- **A free boundary is not a free feature.** Writing the notebook is a tool call. The cost
+  moved earlier; it did not go away.
 - **DSH's own compaction settings are neither visible nor changeable here** — they live in
   the config file and need a dsh restart (why: [Internals](docs/INTERNALS.md)).
 - Restricted-toolset sessions (subagents) that cannot reach `context_notes` degrade to a
