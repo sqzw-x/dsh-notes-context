@@ -31,12 +31,12 @@
 
 ### Documentation
 
-- **The prose was rewritten to read as plain sentences.** The opening paragraph had packed
-  the built-in compaction's behaviour and its three consequences into two dense sentences
-  ("…spends an extra LLM call… **latency** at the moment you most want to keep working…"),
-  which forced a reader to unpack them. The three consequences are now three short
-  sentences, and "It loses information" is stated accurately: by default the model cannot
-  see the replaced text, though `context_history` can still recover it.
+- **The prose is documentation register, not narration.** The previous pass over-corrected
+  into spoken language: short declarative paragraphs, second person, one idea per line
+  ("问题有三个。一是慢。总结要等模型返回…"). That reads as storytelling in a code
+  repository. Statements are now terse and impersonal, the three problems are a bulleted
+  list under a `DSH 内置压缩机制` heading rather than an essay, and the same change was
+  applied to `docs/INTERNALS.md`.
 - **The README is a README again.** It had grown to 344 lines (268 in English), most of it
   threshold derivations, field-flow plumbing and schema rationale — internals a reader
   configuring a plugin does not need. It is now 101 / 122 lines: what the plugin does, the
