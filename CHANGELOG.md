@@ -31,6 +31,10 @@
 
 ### Documentation
 
+- **The remaining invented terms are gone.** 提醒带 and 触发点 were mine; the plain forms
+  are 提醒区间 and 压缩阈值, and 提前量 is now `lead`, the name the formula uses. The
+  sentence that read "上下文进入触发点前的提醒带时" is now "已使用的上下文接近压缩阈值时
+  （距阈值不足 32,000 token）".
 - **The prose is documentation register, not narration.** The previous pass over-corrected
   into spoken language: short declarative paragraphs, second person, one idea per line
   ("问题有三个。一是慢。总结要等模型返回…"). That reads as storytelling in a code

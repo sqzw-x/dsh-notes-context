@@ -43,8 +43,8 @@ Cap: 16 KiB (UTF-8 bytes). A write past the cap is refused, never stored in part
 
 ### The reminder (once per window)
 
-When the context enters the band below the trigger, one reminder is injected, telling the
-model to update the notebook.
+When the context usage approaches the compression threshold — within the final 32,000
+tokens before it — one reminder is injected, telling the model to update the notebook.
 
 The reminder may be ignored: compaction proceeds regardless. Its purpose is to limit detail
 loss.
