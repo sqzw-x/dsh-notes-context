@@ -31,6 +31,11 @@
 
 ### Documentation
 
+- **The README is a README again.** It had grown to 344 lines (268 in English), most of it
+  threshold derivations, field-flow plumbing and schema rationale — internals a reader
+  configuring a plugin does not need. It is now 101 / 122 lines: what the plugin does, the
+  four keys that matter, install, and the limitations worth knowing. Everything removed
+  moved to `docs/INTERNALS.md` rather than being deleted.
 - **Both README editions' threshold sections were rewritten for the new fields.** They had
   been describing `reminderLeadRatio` / `Min` / `Max` and the ratio-only trigger long after
   those stopped being how the plugin works, including the 1M-window worked example and the
@@ -38,12 +43,12 @@
   this project actually uses (`thresholdTokens: 450000` → compaction at 450K, reminder at
   418K, 20,000-token tail), and the settings-page field inventory was corrected: three
   numeric inputs became eleven fields across the same four groups.
-- **New section: how the thresholds are computed.** Every symbol is defined before it is
-  used — `contextWindow`, `reservedCompletionTokens`, `M`, `B`, `thresholdTokens`,
-  `retainTokens`, `lead`, `band` — with the reason each step exists, a worked 1M-window
-  example on defaults, and the three traps (`lead` is capped at 32k rather than 12.5%;
-  which of the two ceilings wins depends on the output reservation; `maxTokens` is not
-  an independent setting). Mirrored in both README editions.
+- **New section: how the thresholds are computed** — now in `docs/INTERNALS.md`. Every
+  symbol is defined before it is used — `contextWindow`, `reservedCompletionTokens`, `M`,
+  `B`, `thresholdTokens`, `retainTokens`, `lead`, `band` — with the reason each step
+  exists, a worked 1M-window example, and the three traps (`lead` is capped at 32k rather
+  than 12.5%; which of the two ceilings wins depends on the output reservation; `maxTokens`
+  is not an independent setting). Mirrored in both languages.
 - **Recorded which values accept a ratio and which accept an absolute number**, and that
   there is no absolute form of the threshold at all — it is always derived from
   `thresholdRatio` and the model's declared window.
