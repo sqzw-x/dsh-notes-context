@@ -163,7 +163,7 @@ const zh: Record<string, string> = {
 	thresholdTokens: '滚动触发点（tokens，-1 = 跟随比例）',
 	thresholdTokensHint: '绝对值优先于 thresholdRatio。填 -1 表示改用比例。',
 	keepRecentTokens: '滚动后保留原文（tokens）',
-	keepRecentTokensHint: '绝对值。取代底层压缩引擎的 retainRatio / retainTokens。',
+	keepRecentTokensHint: '绝对值。取代 DSH 内置压缩的 retainRatio / retainTokens。',
 	reserveTokens: '触发点下方的预留（tokens）',
 	reserveTokensHint: '留空表示默认：模型窗口的 15%，且不低于 16384。',
 	footer: '触发点、保留量与预留改完立刻生效；滚动边界模板等要下一次窗口滚动才体现。',

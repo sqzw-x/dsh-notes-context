@@ -290,8 +290,8 @@ volatile 字段自动投影成表单（`dsh-settings` 的 `volatileForm`）。�
 | 字段 | 作用 |
 |---|---|
 | `thresholdTokens` | **绝对值触发点**。设 `450000` 就到 450K 压缩，窗口由运行时解析后自动折算，换模型也是 450K。填 `-1` 表示改用比例（`thresholdRatio`）。 |
-| `keepRecentTokens` | **滚动后保留的原文**，绝对值。默认 20000；取代底层压缩引擎的 `retainRatio`/`retainTokens`（你显式设了那两个，则它们优先）。 |
-| `reserveTokens` | **触发点下方的预留**。留空 = `max(15% × 窗口, 16384)`；显式设了底层压缩引擎的 `headroomTokens` 则它优先。 |
+| `keepRecentTokens` | **滚动后保留的原文**，绝对值。默认 20000；取代 DSH 内置压缩的 `retainRatio`/`retainTokens`（你显式设了那两个，则它们优先）。 |
+| `reserveTokens` | **触发点下方的预留**。留空 = `max(15% × 窗口, 16384)`；显式设了 DSH 内置压缩的 `headroomTokens` 则它优先。 |
 
 > **提醒位置不可配。** 它由公式推导，与 omp 一致：
 > `lead = min(32000, max(8192, floor(触发点 × 0.125)))`。
@@ -317,11 +317,11 @@ volatile 字段自动投影成表单（`dsh-settings` 的 `volatileForm`）。�
 两个原因，都是刻意的：
 
 1. **它们不出现在表单里。** 设置服务只渲染有 volatile 祖先的字段，普通字段被当作
-   「普通配置」排除。我们在 `schema.ts` 里把底层压缩引擎的 schema 原样铺开、**没有**标 volatile。
-2. **即使改了也不会立刻生效。** 底层压缩引擎在构造时就把这些配置解析进自己的
+   「普通配置」排除。我们在 `schema.ts` 里把 DSH 内置压缩的 schema 原样铺开、**没有**标 volatile。
+2. **即使改了也不会立刻生效。** DSH 内置压缩在构造时就把这些配置解析进自己的
    `this.config`，之后不再重读；而 volatile 提交不会重新构造实例。
 
-把它们标成 volatile 会更糟：底层压缩引擎按**值**读这些字段
+把它们标成 volatile 会更糟：DSH 内置压缩按**值**读这些字段
 （`config.headroomTokens ?? 65536`），拿到句柄会让它的算术出错、并在挂载时被
 `validateKeys` 拒绝。所以它们保持普通值，只能走配置文件。
 
@@ -332,7 +332,7 @@ volatile 字段自动投影成表单（`dsh-settings` 的 `volatileForm`）。�
 - **笔记本每写一次就是一条留在上下文里的消息。** 频繁重写会让上下文变大；
   这也正是提醒里要求「保持紧凑索引、整体替换而不是追加」的原因。
 - **边界零开销 ≠ 整个过程零开销。** 写笔记本本身是一次工具调用，成本只是从前移到边界之前了。
-- **父类会给摘要套一层外壳。** 底层压缩引擎把每段静态摘要包进
+- **父类会给摘要套一层外壳。** DSH 内置压缩把每段静态摘要包进
   `CHECKPOINT_PREAMBLE` + `<compacted-summary>`；除非重写整个事务，否则这层外壳去不掉。
   内层的 `<context-window-rollover>` 块是逐字保留的。
 - **外部插件无法声明自有会话事件类型。** DSH 0.2.0-rc.2 要求未知事件类型携带 `ignorable`
