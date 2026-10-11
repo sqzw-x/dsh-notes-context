@@ -1,0 +1,41 @@
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: command
+    model: deepseek/deepseek-v4.1-flash
+
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      command:
+        displayName: Command
+        apiKeyEnv: COMMAND_API_KEY
+        api: openai-completions
+        baseURL: https://api.commandcode.ai/provider/v1
+        models:
+          - id: deepseek/deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+            contextWindow: 1000000
+            reasoningEfforts:
+              low: low
+              high: high
+              max: max
+            input:
+              - text
+              - image
+
+# Reminder-only run: threshold above the natural context size, and a lead wide
+# enough that the very first step falls inside the warm band. This isolates the
+# notebook/reminder half without triggering a rollover.
+- id: notes-context
+  config:
+    thresholdRatio: 0.01
+    headroomTokens: 0
+    maxTokens: 1024
+    retainTokens: 64
+    reminderLeadMinTokens: 1000000
+    reminderLeadMaxTokens: 1000000
+    reminderLeadRatio: 0.9
+    enabled: true
+    reminderEnabled: true

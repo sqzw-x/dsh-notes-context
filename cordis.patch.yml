@@ -1,0 +1,30 @@
+# dsh-notes-context profile patch layer.
+#
+# Two rows, both required:
+#
+#  1. Disable the base LLM-summarizing compaction backend. This package mounts
+#     its own provider for `ctx.compaction`, and two providers for one service
+#     conflict: `ctx.reflect.provide` throws, the losing fiber is left FAILED,
+#     and which one loses depends on service availability order rather than on
+#     anything configured here.
+#  2. Mount this package. One row does both halves: it registers the
+#     `context_notes` / `context_history` tools and the per-window reminder, and
+#     it mounts the rollover engine as a child plugin. The engine subclasses the
+#     base backend, reusing its automatic pressure policy, retention, tool
+#     pairing and locking, and replaces only the summary text with a static,
+#     zero-LLM rollover template plus the agent's own notebook.
+#
+# All base compaction knobs (`auto`, `thresholdRatio`, `headroomTokens`,
+# `retainRatio`, `retainTokens`, `maxTokens`, `compactionRetries`,
+# `maxOverflowRetries`, `modelPolicies`) are accepted in this row's `config`
+# unchanged, composed from the base engine's own schema so there is exactly one
+# declaration of each.
+#
+# Disable the notebook half without uninstalling by setting `enabled: false`
+# (tools and reminder disappear; the static rollover stays).
+- id: compaction-basic
+  disabled: true
+
+- insert:
+    - id: notes-context
+      name: 'dsh-notes-context'

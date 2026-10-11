@@ -1,0 +1,4 @@
+# Mounts the request-dump observer. Adjust the path to this directory.
+- insert:
+    - id: dump-request
+      name: '/Users/srz/projects/dsh-plugins/packages/dsh-notes-context/docs/dump-request.mjs'
