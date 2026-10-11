@@ -162,7 +162,7 @@ const zh: Record<string, string> = {
 	reminderEnabledHint: '接近阈值时，每窗口给模型一次可见的提示。',
 	reminderLeadMaxTokens: '提醒提前量上限（tokens）',
 	reminderLeadMaxTokensHint: '提醒最多提前多少 token 触发。',
-	footer: '压缩策略（阈值、保留比例、模型策略）仍留在 cordis.patch.yml：引擎在挂载时一次性解析。',
+	footer: '压缩策略（阈值、保留比例、模型策略）在 dsh 侧，只能改配置文件并重启 dsh：引擎在挂载时一次性解析。',
 	notebook: "笔记本",
 	reminder: "滚动提醒",
 	rollover: "滚动边界",
@@ -172,7 +172,7 @@ const zh: Record<string, string> = {
 	reminderLeadMinTokens: "提醒提前量下限（tokens）",
 	reminderLeadMinTokensHint: "提前量不小于此值。",
 	rolloverText: "滚动边界模板",
-	rolloverTextHint: "窗口滚动时写入的静态「摘要」全文。它不会被模型加工；下一次滚动生效。",
+	rolloverTextHint: "窗口滚动时写入的静态「摘要」全文。它不会被模型加工；下一次窗口滚动生效。",
 	notebookSummaryMaxChars: "边界摘要里的笔记本字符上限",
 	notebookSummaryMaxCharsHint: "超出部分会被截断并附注提示，原始笔记本不受影响。",
 	staticProvider: "摘要的 provider 标记",
@@ -190,7 +190,7 @@ const zh: Record<string, string> = {
 	summaryTruncationMarker: "截断标记",
 	summaryTruncationMarkerHint: "摘要被截断时追加的后缀。",
 	historyBoundaryMarker: "边界标记文字",
-	historyBoundaryMarkerHint: "标出压缩/滚动边界的那段文字。",
+	historyBoundaryMarkerHint: "标出压缩/窗口滚动边界的那段文字。",
 }
 
 /** English copy; the fallback locale, so it must carry every key above. */

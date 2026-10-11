@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- **New section: how the thresholds are computed.** Every symbol is defined before it is
+  used — `contextWindow`, `reservedCompletionTokens`, `M`, `B`, `thresholdTokens`,
+  `retainTokens`, `lead`, `band` — with the reason each step exists, a worked 1M-window
+  example on defaults, and the three traps (`lead` is capped at 32k rather than 12.5%;
+  which of the two ceilings wins depends on the output reservation; `maxTokens` is not
+  an independent setting). Mirrored in both README editions.
+- **Recorded which values accept a ratio and which accept an absolute number**, and that
+  there is no absolute form of the threshold at all — it is always derived from
+  `thresholdRatio` and the model's declared window.
+- **State plainly that dsh's own compaction settings can only be changed in the config
+  file and need a dsh restart**, while this plugin's 16 fields are live-editable. Was
+  previously split across two places without saying how the change is made.
+
+### Changed
+
+- **Terminology made consistent.** `compaction` is 压缩, `rollover` is 窗口滚动,
+  `shadow` is 遮蔽; the settings page and both READMEs now agree. This also removes an
+  invented term for rollover that appeared nowhere else.
+
 ## 0.1.0
 
 Initial release. Ports omp's **notes-backed context windows** to DeepSeek Harness.

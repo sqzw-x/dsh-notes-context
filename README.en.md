@@ -54,7 +54,8 @@ context_notes { text: "" }         → clear it
 When pressure enters the warm band below the threshold, the plugin inserts one
 **model-visible, at-most-once-per-window** reminder at the nearest step boundary
 (see the README's Chinese edition for the verbatim text). The band is
-`[threshold − lead, threshold)` with `lead = clamp(threshold × 0.125, 8192, 32000)`.
+`[threshold − lead, threshold)` with `lead` derived from `threshold × 0.125` and then
+bounded by 8192 and 32000 (see [How the thresholds are computed](#how-the-thresholds-are-computed)).
 Dedup is keyed on the branch's last rollover boundary, so it fires once per window,
 not once per turn.
 
@@ -104,21 +105,141 @@ The bundle patch disables `compaction-basic` and mounts this package. Both rows 
 required: two providers for one service conflict, the losing fiber is left `FAILED`,
 and which one loses depends on service availability order.
 
+## How the thresholds are computed
+
+The sections above keep referring to "the threshold", "the lead" and "the retention
+budget". This section derives each one, so you do not have to guess.
+
+### Inputs (not configuration)
+
+| Symbol | Meaning | Where it comes from |
+|---|---|---|
+| `contextWindow` | **The model's declared total capacity** — one window shared by input and output | `ctx.llm.resolveModelInfo(provider, model)` → `context.contextWindow`, declared by the adapter |
+| `reservedCompletionTokens` | **Output tokens reserved for this reply**; this space cannot hold input | `session.requestHeader().config.maxTokens` → else `info.defaultMaxTokens` → else `0` |
+
+`contextWindow` belongs to the **model**, not to configuration. Swap models and every
+number below changes.
+
+### Step 1 — how much room is left
+
+| Symbol | Formula | Meaning |
+|---|---|---|
+| `M` | `contextWindow − reservedCompletionTokens` | **What is actually available for conversation content** once the output reservation is set aside. The window is shared, so output must be yielded first |
+| `B` | `M − headroomTokens` | **The ceiling the conversation may grow to** after the fixed headroom is also deducted. Compaction must not wait until the window is genuinely full |
+
+`headroomTokens` is defined upstream as *"additional pressure headroom beyond the
+routed output reservation"* — **a fixed token reserve deducted on top of the output
+reservation** (default 65536). It does two things:
+
+1. it holds the threshold **below** the physical capacity ceiling, giving compaction
+   that much lead; and
+2. an unset `maxTokens` **inherits its value** (`dsh-compaction-basic/lib/index.js:64`).
+
+### Step 2 — the threshold: the smaller of two ceilings
+
+```
+thresholdTokens = floor( min( contextWindow × thresholdRatio,  B ) )
+                            └────────── ceiling 1 ────────┘   └ceiling 2┘
+```
+
+| Ceiling | Formula | Meaning |
+|---|---|---|
+| 1: window fraction | `contextWindow × thresholdRatio` | **A policy preference**: "compress once the window is 80% used" |
+| 2: remaining capacity | `B` | **A physical constraint**: after the output reservation and headroom, this is all there is |
+
+`thresholdTokens` is **the pressure at which dsh performs one compaction**. Each ceiling
+is an independent reason to stop growing, and **either one is sufficient** — hence the
+minimum.
+
+### Step 3 — the retention budget
+
+```
+retainTokens = retainTokens                     when an absolute value is configured
+             = floor( M × retainRatio )         otherwise
+```
+
+**How much recent raw text is kept verbatim after a compaction.** Hard constraint: it
+must be `< thresholdTokens`, or the engine throws — compacting to still-above-threshold
+would be pointless.
+
+Mind the **base**: this multiplies `M` (the input budget), while `thresholdRatio`
+multiplies `contextWindow`. The two are not comparable directly.
+
+The number is a **budget**, and the real tail is only ever larger: selection works on
+whole messages and cannot split one, so the accumulation overshoots the budget, and the
+cut then moves further back to satisfy tool-call/tool-result pairing
+(`dsh-compaction-basic/lib/index.js:410-433`).
+
+### Step 4 — the reminder lead and band
+
+```
+lead = min( max( round(thresholdTokens × reminderLeadRatio),  reminderLeadMinTokens ),
+            max(reminderLeadMinTokens, reminderLeadMaxTokens) )
+band = [ max(0, thresholdTokens − lead),  thresholdTokens )
+```
+
+| Symbol | Meaning | How to read it |
+|---|---|---|
+| `lead` | **How long before the threshold the model is told to write its notebook** | Three layers: ① by ratio → ② raised to the lower bound → ③ capped by the upper bound. The outer `max(Min, Max)` keeps an inverted pair from producing a negative-width band |
+| `band` | **The interval in which the reminder can fire**, half-open | `max(0, …)` keeps the start non-negative when the lead exceeds the threshold |
+
+The half-open interval is deliberate: dsh compacts at `≥ thresholdTokens`
+(`dsh-compaction-basic/lib/index.js:941`) while the reminder lives strictly below it, so
+**no single step can both remind and compact**.
+
+### Worked example: a 1M window on defaults
+
+`contextWindow = 1,000,000`, `reservedCompletionTokens = 0`:
+
+| Step | Quantity | Formula | Value |
+|---|---|---|---|
+| 1 | `M` | 1,000,000 − 0 | 1,000,000 |
+| 1 | `B` | 1,000,000 − 65,536 | 934,464 |
+| 2 | ceiling 1 | 1,000,000 × 0.8 | 800,000 |
+| 2 | ceiling 2 | = `B` | 934,464 |
+| 2 | `thresholdTokens` | min(800,000, 934,464) | **800,000** ← ratio wins |
+| 3 | `retainTokens` | floor(1,000,000 × 0.16) | **160,000** |
+| 4 | `lead` | 100,000 → 100,000 → 32,000 | **32,000** ← upper bound wins |
+| 4 | `band` | [800,000 − 32,000, 800,000) | **[768,000, 800,000)** |
+| — | one compaction | 800,000 − 160,000 | ~640,000 |
+
+So the event chain is: **reminder possible from 768k → model writes the notebook →
+compaction at 800k (static template, zero model calls) → a 160k tail plus the notebook
+are kept → the notebook is re-published if a rollover shadowed it**. The window then
+advances 800k per cycle, i.e. a period of 1.25 one-million-token windows with a fixed
+in-window position.
+
+Three things that are easy to get wrong:
+
+1. **`lead` is capped at 32k, not 12.5%.** `800k × 0.125 = 100k` is held down by
+   `reminderLeadMaxTokens = 32000`. To let the lead scale with the threshold you must
+   raise that upper bound too.
+2. **Which ceiling wins depends on `reservedCompletionTokens`.** With a reservation of
+   ≤ 131,072 the threshold is 800k; at 200,000 ceiling 2 takes over and it drops to
+   734,464. **A larger output reservation lowers the threshold.**
+3. **`maxTokens` is not an independent setting.** Left unset it equals `headroomTokens`,
+   and it feeds both the output reservation and `B`.
+
 ## Configuration
 
-Every base compaction knob (`auto`, `thresholdRatio`, `headroomTokens`, `retainRatio`,
-`retainTokens`, `maxTokens`, `compactionRetries`, `maxOverflowRetries`, `modelPolicies`)
-is accepted on this row unchanged, composed from the base engine's own schema so there
-is exactly one declaration of each. Plus:
+> **dsh's own compaction configuration can only be changed in the config file (the
+> profile YAML). dsh reads it once at startup, so a change requires restarting dsh.**
+
+Every compaction setting (`auto`, `thresholdRatio`, `headroomTokens`, `retainRatio`,
+`retainTokens`, `maxTokens`, `summarizationProvider`, `summarizationModel`,
+`compactionRetries`, `maxOverflowRetries`, `modelPolicies`) is accepted on this row
+unchanged, composed from the dsh engine's own schema so there is exactly one declaration
+of each. These are **not** volatile, **do not appear on the settings page**, and take
+effect only after a restart. Plus these, which are live-editable in the settings page:
 
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Off unregisters the tools and reminder (the static rollover stays) |
 | `maxNotebookBytes` | `16384` | Notebook UTF-8 byte cap |
 | `reminderEnabled` | `true` | Send the threshold reminder |
-| `reminderLeadRatio` | `0.125` | Warm-band width as a fraction of the threshold |
-| `reminderLeadMinTokens` | `8192` | Lower clamp for the band width |
-| `reminderLeadMaxTokens` | `32000` | Upper clamp for the band width |
+| `reminderLeadRatio` | `0.125` | Reminder lead as a fraction of the threshold |
+| `reminderLeadMinTokens` | `8192` | Lower bound for the lead |
+| `reminderLeadMaxTokens` | `32000` | Upper bound for the lead |
 | `rolloverText` | see above | Static template written at the boundary |
 
 ## Honest limitations
@@ -139,6 +260,9 @@ is exactly one declaration of each. Plus:
 - **The parent wraps the summary.** The base backend frames every static summary in
   `CHECKPOINT_PREAMBLE` + `<compacted-summary>`; the wrapper is not removable without
   reimplementing the transaction. The inner block is preserved verbatim.
+- **dsh's compaction settings are invisible and immutable in the settings page; change
+  the config file and restart dsh.** This keeps them working by value, and is a design
+  trade-off rather than an oversight.
 - Restricted-toolset sessions (subagents) that cannot reach `context_notes` degrade to
   a notebook-less rollover.
 
