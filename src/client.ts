@@ -144,7 +144,7 @@ const TEXT_FIELDS = new Set<FieldId>([
  * call time.
  */
 const zh: Record<string, string> = {
-	title: '笔记式上下文窗口',
+	title: '笔记式上下文压缩',
 	description: 'Agent 跨窗口维护一本持久笔记本，窗口滚动本身不产生模型调用。',
 	overridden: '已覆盖',
 	reset: '恢复默认',
@@ -195,7 +195,7 @@ const zh: Record<string, string> = {
 
 /** English copy; the fallback locale, so it must carry every key above. */
 const en: Record<string, string> = {
-	title: 'Notes-backed context windows',
+	title: 'Notes-backed context compression',
 	description:
 		'The agent keeps a durable notebook across context rollovers, so a window boundary costs no model call.',
 	overridden: 'Overridden',

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Notes-backed context windows",
+    "title": "Notes-backed context compression",
     "description": "Replace LLM-summarized compaction with a model-written persistent notebook: the rollover boundary costs zero model calls, and raw history stays readable by seq."
   }
 }

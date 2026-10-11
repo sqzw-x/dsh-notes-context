@@ -46,6 +46,11 @@
 
 ### Changed
 
+- **Display name is now 笔记式上下文压缩** (`Notes-backed context compression` in the
+  English locale), replacing 笔记式上下文窗口. The Chinese name matches what the plugin
+  actually does: it does not only carry a notebook across a window, it replaces the
+  compression that happens at the boundary. Both locales use the same noun so a
+  language switch does not rename the feature.
 - **Terminology made consistent.** `compaction` is 压缩, `rollover` is 窗口滚动,
   `shadow` is 遮蔽; the settings page and both READMEs now agree. This also removes an
   invented term for rollover that appeared nowhere else.
