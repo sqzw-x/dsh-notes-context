@@ -31,6 +31,13 @@
 
 ### Documentation
 
+- **Both README editions' threshold sections were rewritten for the new fields.** They had
+  been describing `reminderLeadRatio` / `Min` / `Max` and the ratio-only trigger long after
+  those stopped being how the plugin works, including the 1M-window worked example and the
+  "three things that are easy to get wrong" list. The example now runs the configuration
+  this project actually uses (`thresholdTokens: 450000` → compaction at 450K, reminder at
+  418K, 20,000-token tail), and the settings-page field inventory was corrected: three
+  numeric inputs became eleven fields across the same four groups.
 - **New section: how the thresholds are computed.** Every symbol is defined before it is
   used — `contextWindow`, `reservedCompletionTokens`, `M`, `B`, `thresholdTokens`,
   `retainTokens`, `lead`, `band` — with the reason each step exists, a worked 1M-window

@@ -121,97 +121,81 @@ dsh --profile <你的 profile> --dump-config   # 确认两层都生效
 
 | 符号 | 含义 | 从哪来 |
 |---|---|---|
-| `contextWindow` | **模型声明的上下文总容量**，输入与输出共用这一个窗口 | `ctx.llm.resolveModelInfo(provider, model)` 返回的 `context.contextWindow`，由适配器声明 |
-| `reservedCompletionTokens` | **为本次回复预留的输出 token**，这段不能拿来放输入 | `session.requestHeader().config.maxTokens` → 取不到则 `info.defaultMaxTokens` → 再取不到则 `0` |
+| `contextWindow` | **模型声明的上下文总容量**，输入与输出共用这一个窗口 | 由适配器声明，运行时解析。1M 模型就是 1,000,000 |
+| `reservedCompletionTokens` | **为本次回复预留的输出 token**，这段不能拿来放输入 | 本次请求的输出上限；通常为 0，可忽略 |
 
 `contextWindow` 是**模型**的属性，不是配置项——换一个模型，下面所有数都会变。
 
-### 第一步：算出两级「还能装多少」
+### 第一步：算出可用容量
 
 | 符号 | 算式 | 含义 |
 |---|---|---|
-| `M` | `contextWindow − reservedCompletionTokens` | **扣掉输出预留后，真正能放对话内容的量**。窗口是输入输出共享的，输出那部分必须先让出来 |
-| `B` | `M − headroomTokens` | **再扣掉固定预留空间后，允许对话涨到的上限**。压缩不能等窗口真满了才做，得留余量 |
+| `M` | `contextWindow − reservedCompletionTokens` | **真正能放对话内容的量** |
+| `B` | `M − 预留` | **允许对话涨到的上限**。预留默认 `max(15% × 窗口, 16384)` |
 
-`headroomTokens` 的官方定义是 *"additional pressure headroom beyond the routed output reservation"*
-——**在输出预留之外，额外再扣掉的一段固定 token 保留空间**（默认 65536）。它有两个作用：
+预留用 `reserveTokens` 配置；**留空就用上面那个公式**。它的作用只有一个：让压缩**低于**窗口物理上限，留出余量。
 
-1. 让阈值**低于**物理容量上限，于是压缩有提前量；
-2. `maxTokens` 不显式设置时**继承它的值**（`dsh-compaction-basic/lib/index.js:64`）。
+### 第二步：定触发点——两种写法，绝对值优先
 
-### 第二步：算出阈值——两道上限取小
+| 你写的 | 触发点 |
+|---|---|
+| `thresholdTokens: 450000` | **450,000**。绝对值优先，窗口在运行时折算，换模型也是 450K |
+| `thresholdTokens: -1`（默认）+ `thresholdRatio: 0.8` | `floor(min(窗口 × 0.8, B))` → 1M 窗口是 **800,000** |
+
+绝对值还受一道保护：**若它 ≥ 窗口**（永远触发不了），自动退到 `B`。
+
+### 第三步：定保留量
 
 ```
-thresholdTokens = floor( min( contextWindow × thresholdRatio,  B ) )
-                            └───────── 上限一 ─────────┘     └上限二┘
+keepRecentTokens = 20000（默认，绝对值）
 ```
 
-| 上限 | 算式 | 含义 |
+**压缩后从最新往回保留多少 token 的原文。** 硬约束：必须 `< 触发点`，否则报错。
+
+这个数只是**预算**，实际保留只会更多：裁剪按整条消息做、不能切半条，切点还要再往旧挪以满足 tool-call/tool-result 配对平衡。所以真实保留是"最大的、不超预算的整消息后缀"。
+
+> 若你显式设了 DSH 内置压缩的 `retainTokens` 或 `retainRatio`，那它们优先，本字段不生效。
+
+### 第四步：提醒位置——推导，不可配
+
+```
+lead = min(32000, max(8192, floor(触发点 × 0.125)))
+提醒带 = [触发点 − lead, 触发点)
+```
+
+与 omp 一致：提前量是**算出来的**，没有配置项。上限 32000 在触发点 ≥ 256,000 之后就一直是它，所以 1M 窗口下 `lead` 恒为 32,000。
+
+半开区间是刻意的：压缩在 `≥ 触发点` 时发生，提醒在 `< 触发点` 生效，所以**同一步里不可能既提醒又压缩**。
+
+### 实例一：默认配置（1M 窗口）
+
+| 量 | 算式 | 值 |
 |---|---|---|
-| 上限一：窗口比例 | `contextWindow × thresholdRatio` | **策略偏好**：「窗口用到 80% 就该压了」 |
-| 上限二：容量剩余 | `B` | **物理约束**：输出预留和预留空间之后，就剩这么多可用 |
+| 预留 | max(1,000,000 × 15%, 16384) | 150,000 |
+| `B` | 1,000,000 − 150,000 | 850,000 |
+| 触发点 | `min(1,000,000 × 0.8, 850,000)` | **800,000** |
+| 保留量 | 默认 | **20,000** |
+| 提前量 | `min(32000, floor(800,000 × 0.125))` | 32,000 |
+| 提醒带 | [800,000 − 32,000, 800,000) | **[768,000, 800,000)** |
+| 单次压缩量 | 800,000 − 20,000 | 780,000 |
 
-`thresholdTokens` 就是**压力到这个 token 数、dsh 执行一次压缩**的点。两道上限各自代表一种「不许再涨」的理由，
-**任一成立就必须压**，所以取小。
+### 实例二：你要的配置（`thresholdTokens: 450000`，1M 窗口）
 
-### 第三步：算出保留预算
-
-```
-retainTokens = retainTokens                    若显式设了绝对值
-             = floor( M × retainRatio )        否则
-```
-
-**压缩后从最新往回保留多少 token 的原文。** 硬约束：必须 `< thresholdTokens`，否则报错——压完还超阈值就没意义了。
-
-注意**基数**：这里乘的是 `M`（输入预算），而 `thresholdRatio` 乘的是 `contextWindow`。
-两者基数不同，**不能直接比大小**。
-
-这个数只是**预算**，实际保留只会更多：裁剪按整条消息做，不能切半条，
-所以累加会跨过预算，切点还要再往旧挪以满足 tool-call/tool-result 配对平衡（见 `dsh-compaction-basic/lib/index.js:410-433`）。
-
-### 第四步：算出提醒提前量与触发起止点
-
-```
-lead = min( max( round(thresholdTokens × reminderLeadRatio),  reminderLeadMinTokens ),
-            max(reminderLeadMinTokens, reminderLeadMaxTokens) )
-band = [ max(0, thresholdTokens − lead),  thresholdTokens )
-```
-
-| 符号 | 含义 | 怎么读 |
+| 量 | 算式 | 值 |
 |---|---|---|
-| `lead` | **在阈值之前多少 token 就提醒模型该写笔记了** | 三层：① 按比例算 → ② 抬到下限 → ③ 压到上限。最外层的 `max(Min, Max)` 是为了你把下限设得比上限大时不产生倒挂区间 |
-| `band` | **提醒实际生效的区间**，半开（左闭右开） | `max(0, …)` 让提前量大于阈值时不出现负数起点 |
+| 触发点 | 绝对值 | **450,000** |
+| 保留量 | 默认 | **20,000** |
+| 提前量 | `min(32000, floor(450,000 × 0.125))` | 32,000 |
+| 提醒带 | [450,000 − 32,000, 450,000) | **[418,000, 450,000)** |
+| 单次压缩量 | 450,000 − 20,000 | 430,000 |
 
-半开区间是刻意的：dsh 在 `≥ thresholdTokens` 时压缩（`dsh-compaction-basic/lib/index.js:941`），
-提醒在 `< thresholdTokens` 生效，所以**同一步里不可能既提醒又压缩**。
+事件链：**418k 提醒 → 模型写笔记 → 450k 压缩（摘要为静态模板，零模型调用）→ 保留 20k 原文 + 笔记本 → 笔记本若被遮蔽随后补发**。
 
-### 一个 1M 窗口的实例（默认配置）
+### 三个容易算错的地方
 
-`contextWindow = 1,000,000`，`reservedCompletionTokens = 0`：
-
-| 步 | 量 | 算式 | 值 |
-|---|---|---|---|
-| 1 | `M` | 1,000,000 − 0 | 1,000,000 |
-| 1 | `B` | 1,000,000 − 65,536 | 934,464 |
-| 2 | 上限一 | 1,000,000 × 0.8 | 800,000 |
-| 2 | 上限二 | = `B` | 934,464 |
-| 2 | `thresholdTokens` | min(800,000, 934,464) | **800,000** ← 比例生效 |
-| 3 | `retainTokens` | floor(1,000,000 × 0.16) | **160,000** |
-| 4 | `lead` | 100,000 → 100,000 → 32,000 | **32,000** ← 上限生效 |
-| 4 | `band` | [800,000 − 32,000, 800,000) | **[768,000, 800,000)** |
-| — | 单次压缩量 | 800,000 − 160,000 | ~640,000 |
-
-于是事件链是：**768k 起可能提醒 → 模型写笔记 → 800k 压缩（摘要为静态模板，零模型调用）
-→ 保留 160k 近期原文 + 笔记本 → 笔记本若被遮蔽随后补发**。窗口每推进 800k 重复一轮，
-所以周期是 1.25 个 1M 窗口，窗口内的位置固定。
-
-三个容易算错的地方：
-
-1. **`lead` 是 32k 上限，不是 12.5%**。`800k × 0.125 = 100k` 被 `reminderLeadMaxTokens = 32000` 压住了。
-   想让提前量跟着阈值走，必须同时抬高 `reminderLeadMaxTokens`。
-2. **两道上限谁生效，取决于 `reservedCompletionTokens`**。预留 ≤ 131,072 时阈值恒为 800k；
-   预留到 200,000 时上限二接管，阈值降到 734,464。**输出预留越大，阈值越低。**
-3. **`maxTokens` 不是独立配置项**，不设就等于 `headroomTokens`，而它同时影响输出预留和 `B` 两处。
+1. **提醒位置推不动。** 它只跟触发点走。想让它落在别处，就改触发点。
+2. **触发点的绝对值是真绝对值。** 窗口在运行时解析后折算，所以换模型（200K / 1M）都是你写的那个数；只有绝对值 ≥ 窗口时才退让。
+3. **`reserveTokens` 与输出预留无关。** 它是为了不让压缩贴着窗口上限跑；默认 15% 窗口，小窗口下由 16384 兜底。
 
 ## 配置
 
@@ -245,7 +229,8 @@ volatile 字段自动投影成表单（`dsh-settings` 的 `volatileForm`）。�
 ```yaml
 - id: notes-context
   config:
-    reminderLeadMaxTokens: 100000
+    thresholdTokens: 450000
+    keepRecentTokens: 20000
     maxNotebookBytes: 32768
 ```
 
@@ -257,7 +242,7 @@ volatile 字段自动投影成表单（`dsh-settings` 的 `volatileForm`）。�
 |---|---|---|
 | **开关(Switch)** | `enabled`、`reminderEnabled` | 拨动即写 |
 | **多行文本框** | `rolloverText` | 点「保存」 |
-| 数字输入框(9 个) | `maxNotebookBytes`、`reminderLeadRatio`、`reminderLeadMinTokens`、`reminderLeadMaxTokens`、`notebookSummaryMaxChars`、`historyDefaultLimit`、`maxHistoryEntries`、`maxHistoryBytes`、`historySummaryMaxChars` | 点「保存」 |
+| 数字输入框(11 个) | `maxNotebookBytes`、`thresholdTokens`、`keepRecentTokens`、`reserveTokens`、`notebookSummaryMaxChars`、`historyDefaultLimit`、`maxHistoryEntries`、`maxHistoryBytes`、`historySummaryMaxChars` | 点「保存」 |
 | 单行文本框(4 个) | `staticProvider`、`staticModel`、`summaryTruncationMarker`、`historyBoundaryMarker` | 点「保存」 |
 
 > 两个开关是**拨动即写**,不经过「保存」—— 这是官方约定

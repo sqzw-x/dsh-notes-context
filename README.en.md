@@ -54,8 +54,8 @@ context_notes { text: "" }         → clear it
 When pressure enters the warm band below the threshold, the plugin inserts one
 **model-visible, at-most-once-per-window** reminder at the nearest step boundary
 (see the README's Chinese edition for the verbatim text). The band is
-`[threshold − lead, threshold)` with `lead` derived from `threshold × 0.125` and then
-bounded by 8192 and 32000 (see [How the thresholds are computed](#how-the-thresholds-are-computed)).
+`[trigger − lead, trigger)` with `lead` derived as `min(32000, max(8192, trigger × 0.125))`
+— there is no setting for it (see [How the thresholds are computed](#how-the-thresholds-are-computed)).
 Dedup is keyed on the branch's last rollover boundary, so it fires once per window,
 not once per turn.
 
@@ -107,15 +107,20 @@ and which one loses depends on service availability order.
 
 ## How the thresholds are computed
 
-The sections above keep referring to "the threshold", "the lead" and "the retention
-budget". This section derives each one, so you do not have to guess.
+The sections above keep referring to "the trigger", "the reminder position" and "the
+retention budget". This section derives each one, so you do not have to guess.
+
+> **Just want to set it?** `thresholdTokens` takes an absolute number, so there is
+> nothing to compute: `thresholdTokens: 450000` means compaction at 450K, a reminder at
+> 418K and a 20,000-token tail. The rest of this section explains the defaults and helps
+> when a number comes out unexpected.
 
 ### Inputs (not configuration)
 
 | Symbol | Meaning | Where it comes from |
 |---|---|---|
-| `contextWindow` | **The model's declared total capacity** — one window shared by input and output | `ctx.llm.resolveModelInfo(provider, model)` → `context.contextWindow`, declared by the adapter |
-| `reservedCompletionTokens` | **Output tokens reserved for this reply**; this space cannot hold input | `session.requestHeader().config.maxTokens` → else `info.defaultMaxTokens` → else `0` |
+| `contextWindow` | **The model's declared total capacity** — one window shared by input and output | Declared by the adapter and resolved at runtime. A 1M model means 1,000,000 |
+| `reservedCompletionTokens` | **Output tokens reserved for this reply**; this space cannot hold input | The output cap for this request. Usually 0 and ignorable |
 
 `contextWindow` belongs to the **model**, not to configuration. Swap models and every
 number below changes.
@@ -124,101 +129,82 @@ number below changes.
 
 | Symbol | Formula | Meaning |
 |---|---|---|
-| `M` | `contextWindow − reservedCompletionTokens` | **What is actually available for conversation content** once the output reservation is set aside. The window is shared, so output must be yielded first |
-| `B` | `M − headroomTokens` | **The ceiling the conversation may grow to** after the fixed headroom is also deducted. Compaction must not wait until the window is genuinely full |
+| `M` | `contextWindow − reservedCompletionTokens` | **What is actually available for conversation content** |
+| `B` | `M − reserve` | **The ceiling the conversation may grow to.** The reserve defaults to `max(15% of window, 16384)` |
 
-`headroomTokens` is defined upstream as *"additional pressure headroom beyond the
-routed output reservation"* — **a fixed token reserve deducted on top of the output
-reservation** (default 65536). It does two things:
+The reserve is configured by `reserveTokens`; leave it blank to get the derivation above.
+It has one job: to hold compaction **below** the physical window ceiling so there is room
+to spare.
 
-1. it holds the threshold **below** the physical capacity ceiling, giving compaction
-   that much lead; and
-2. an unset `maxTokens` **inherits its value** (`dsh-compaction-basic/lib/index.js:64`).
+### Step 2 — the trigger: two forms, absolute wins
 
-### Step 2 — the threshold: the smaller of two ceilings
+| What you write | Where it triggers |
+|---|---|
+| `thresholdTokens: 450000` | **450,000.** The absolute count wins; the window is folded in at runtime, so it stays 450K across models |
+| `thresholdTokens: -1` (default) + `thresholdRatio: 0.8` | `floor(min(window × 0.8, B))` → **800,000** on a 1M window |
 
-```
-thresholdTokens = floor( min( contextWindow × thresholdRatio,  B ) )
-                            └────────── ceiling 1 ────────┘   └ceiling 2┘
-```
-
-| Ceiling | Formula | Meaning |
-|---|---|---|
-| 1: window fraction | `contextWindow × thresholdRatio` | **A policy preference**: "compress once the window is 80% used" |
-| 2: remaining capacity | `B` | **A physical constraint**: after the output reservation and headroom, this is all there is |
-
-`thresholdTokens` is **the pressure at which dsh performs one compaction**. Each ceiling
-is an independent reason to stop growing, and **either one is sufficient** — hence the
-minimum.
+An absolute count is also guarded: **at or past the window** it could never fire, so it
+falls back to `B`.
 
 ### Step 3 — the retention budget
 
 ```
-retainTokens = retainTokens                     when an absolute value is configured
-             = floor( M × retainRatio )         otherwise
+keepRecentTokens = 20000 (default, absolute)
 ```
 
 **How much recent raw text is kept verbatim after a compaction.** Hard constraint: it
-must be `< thresholdTokens`, or the engine throws — compacting to still-above-threshold
-would be pointless.
-
-Mind the **base**: this multiplies `M` (the input budget), while `thresholdRatio`
-multiplies `contextWindow`. The two are not comparable directly.
+must be `< trigger`, or the engine throws.
 
 The number is a **budget**, and the real tail is only ever larger: selection works on
 whole messages and cannot split one, so the accumulation overshoots the budget, and the
 cut then moves further back to satisfy tool-call/tool-result pairing
 (`dsh-compaction-basic/lib/index.js:410-433`).
 
-### Step 4 — the reminder lead and band
+> If you explicitly configured the built-in `retainTokens` or `retainRatio`, those win and
+> this field does nothing.
+
+### Step 4 — the reminder position: derived, not configured
 
 ```
-lead = min( max( round(thresholdTokens × reminderLeadRatio),  reminderLeadMinTokens ),
-            max(reminderLeadMinTokens, reminderLeadMaxTokens) )
-band = [ max(0, thresholdTokens − lead),  thresholdTokens )
+lead = min(32000, max(8192, floor(trigger × 0.125)))
+band = [ trigger − lead,  trigger )
 ```
 
 | Symbol | Meaning | How to read it |
 |---|---|---|
-| `lead` | **How long before the threshold the model is told to write its notebook** | Three layers: ① by ratio → ② raised to the lower bound → ③ capped by the upper bound. The outer `max(Min, Max)` keeps an inverted pair from producing a negative-width band |
-| `band` | **The interval in which the reminder can fire**, half-open | `max(0, …)` keeps the start non-negative when the lead exceeds the threshold |
+| `lead` | **How long before the trigger the model is told to write its notebook** | Derived exactly as omp derives it, which exposes no setting for it either. The `32000` ceiling binds from a trigger of 256,000 upward, so in a 1M window the lead is always 32,000 |
+| `band` | **The interval in which the reminder can fire**, half-open | Compaction happens at `≥ trigger` while the reminder lives strictly below it, so **no single step can both remind and compact** |
 
-The half-open interval is deliberate: dsh compacts at `≥ thresholdTokens`
-(`dsh-compaction-basic/lib/index.js:941`) while the reminder lives strictly below it, so
-**no single step can both remind and compact**.
+### Worked example: a 1M window
 
-### Worked example: a 1M window on defaults
-
-`contextWindow = 1,000,000`, `reservedCompletionTokens = 0`:
+`contextWindow = 1,000,000`, `reservedCompletionTokens = 0`, `thresholdTokens: 450000`:
 
 | Step | Quantity | Formula | Value |
 |---|---|---|---|
-| 1 | `M` | 1,000,000 − 0 | 1,000,000 |
-| 1 | `B` | 1,000,000 − 65,536 | 934,464 |
-| 2 | ceiling 1 | 1,000,000 × 0.8 | 800,000 |
-| 2 | ceiling 2 | = `B` | 934,464 |
-| 2 | `thresholdTokens` | min(800,000, 934,464) | **800,000** ← ratio wins |
-| 3 | `retainTokens` | floor(1,000,000 × 0.16) | **160,000** |
-| 4 | `lead` | 100,000 → 100,000 → 32,000 | **32,000** ← upper bound wins |
-| 4 | `band` | [800,000 − 32,000, 800,000) | **[768,000, 800,000)** |
-| — | one compaction | 800,000 − 160,000 | ~640,000 |
+| 1 | reserve | max(1,000,000 × 15%, 16384) | 150,000 |
+| 1 | `B` | 1,000,000 − 150,000 | 850,000 |
+| 2 | trigger | absolute | **450,000** |
+| 3 | `keepRecentTokens` | default | **20,000** |
+| 4 | `lead` | min(32000, floor(450,000 × 0.125)) | 32,000 |
+| 4 | `band` | [450,000 − 32,000, 450,000) | **[418,000, 450,000)** |
+| — | one compaction | 450,000 − 20,000 | 430,000 |
 
-So the event chain is: **reminder possible from 768k → model writes the notebook →
-compaction at 800k (static template, zero model calls) → a 160k tail plus the notebook
-are kept → the notebook is re-published if a rollover shadowed it**. The window then
-advances 800k per cycle, i.e. a period of 1.25 one-million-token windows with a fixed
-in-window position.
+So the event chain is: **reminder at 418k → model writes the notebook → compaction at 450k
+(static template, zero model calls) → a 20k tail plus the notebook are kept → the notebook
+is re-published if a rollover shadowed it**.
+
+With everything at its default instead (`thresholdTokens: -1`), the trigger falls back to
+`min(window × 0.8, B)` — 800,000 on a 1M window — and the band becomes [768,000, 800,000).
 
 Three things that are easy to get wrong:
 
-1. **`lead` is capped at 32k, not 12.5%.** `800k × 0.125 = 100k` is held down by
-   `reminderLeadMaxTokens = 32000`. To let the lead scale with the threshold you must
-   raise that upper bound too.
-2. **Which ceiling wins depends on `reservedCompletionTokens`.** With a reservation of
-   ≤ 131,072 the threshold is 800k; at 200,000 ceiling 2 takes over and it drops to
-   734,464. **A larger output reservation lowers the threshold.**
-3. **`maxTokens` is not an independent setting.** Left unset it equals `headroomTokens`,
-   and it feeds both the output reservation and `B`.
+1. **The reminder position cannot be moved on its own.** It follows the trigger; to move
+   it, move the trigger.
+2. **An absolute trigger is genuinely absolute.** The window is resolved at runtime and
+   the ratio is derived from it, so a 200k model and a 1M model both compact at the number
+   you wrote. It yields only when the number is at or past the window.
+3. **`reserveTokens` is not the output reservation.** It exists so compaction does not run
+   flush against the window ceiling; it defaults to 15% of the window, floored at 16384.
 
 ## Configuration
 
@@ -237,10 +223,12 @@ effect only after a restart. Plus these, which are live-editable in the settings
 | `enabled` | `true` | Off unregisters the tools and reminder (the static rollover stays) |
 | `maxNotebookBytes` | `16384` | Notebook UTF-8 byte cap |
 | `reminderEnabled` | `true` | Send the threshold reminder |
-| `reminderLeadRatio` | `0.125` | Reminder lead as a fraction of the threshold |
-| `reminderLeadMinTokens` | `8192` | Lower bound for the lead |
-| `reminderLeadMaxTokens` | `32000` | Upper bound for the lead |
+| `thresholdTokens` | `-1` | Absolute rollover trigger. An absolute count wins over `thresholdRatio`; `-1` follows the ratio |
+| `keepRecentTokens` | `20000` | Verbatim recent history kept after a rollover, absolute. Replaces the built-in `retainRatio`/`retainTokens` |
+| `reserveTokens` | blank | Reserve held below the trigger. Blank derives `max(15% of window, 16384)` |
 | `rolloverText` | see above | Static template written at the boundary |
+
+The reminder position has no key: it is derived from the trigger, as upstream derives it.
 
 ## Honest limitations
 
