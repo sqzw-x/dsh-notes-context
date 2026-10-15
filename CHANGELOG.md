@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.0
+
+The compaction fields follow omp's names and units, and the absolute rollover trigger no
+longer shrinks by the routed request's output reservation.
+
 ### Added
 
 - **The runtime packages typecheck depends on are now devDependencies.** Every

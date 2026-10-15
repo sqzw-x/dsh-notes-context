@@ -1,6 +1,6 @@
 {
   "name": "dsh-notes-context",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Notes-backed context compression for DeepSeek Harness: replace LLM-summarized compaction with a model-written persistent notebook plus recoverable raw history — the rollover boundary itself costs zero model calls.",
   "license": "MIT",
   "repository": {
