@@ -40,6 +40,33 @@
   `max(15% of window, 16384)` derivation (`effectiveReserveTokens`). Replaces
   `headroomTokens`.
 
+### Fixed
+
+- **The absolute trigger no longer shrinks by the routed output reservation.** The
+  lock wrote `headroomTokens = window − thresholdTokens`, which restates the trigger
+  inside the base backend's own clamp
+  (`min(window × ratio, window − reservedCompletionTokens − headroomTokens)`) and
+  collapses the second ceiling to `thresholdTokens − reservedCompletionTokens`: the
+  output reservation is subtracted twice. On a 1,000,000-token window whose request
+  reserves 393,216 tokens for output — any pi-ai provider with a declared `maxTokens`
+  — a `thresholdTokens: 450000` fired at **56,784**, 5.7% of the window, and the
+  reminder band opened at 48,592. The headroom is now the configured reserve, so the
+  trigger is `min(thresholdTokens, window − reservedCompletionTokens − reserveTokens)`:
+  the point the profile asked for, or the latest point the window can hold. Deriving
+  the headroom from the trigger had only ever been correct while the routed output
+  reservation was 0, which the module docblock stated as an assumption rather than a
+  requirement.
+- **A window's first reminder is scheduled against the locked trigger.** The band was
+  derived from a policy snapshot taken before the lock replaced the engine's resolved
+  config, so the first window of every session used the configured default ratio
+  (0.8 → a band at 518,464–550,464) while the rollover fired at the locked point. The
+  first rollover was therefore never preceded by a reminder. The policy is now re-read
+  after the lock.
+- **`docs/INTERNALS.md` no longer calls `reservedCompletionTokens` negligible.** It is
+  the whole of the defect above: a provider that declares `maxTokens` spends about
+  four tenths of the window on it, and the trigger is the lower of the target and
+  `window − reservedCompletionTokens − reserve`.
+
 ### Removed
 
 - **`reminderLeadRatio`, `reminderLeadMinTokens`, `reminderLeadMaxTokens`.** The

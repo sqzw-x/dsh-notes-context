@@ -179,8 +179,17 @@ export interface Config {
 	 * Reserve held back below the trigger, or `undefined` to derive omp's
 	 * `max(15% of window, 16384)`.
 	 *
-	 * Replaces the base engine's `headroomTokens`. It is both the second ceiling
-	 * on the trigger and the safety gap the rollover leaves under the window.
+	 * Replaces the base engine's `headroomTokens`, and is written into it at the
+	 * absolute trigger's lock. It is both the second ceiling on the trigger and
+	 * the safety gap the rollover leaves under the window: the trigger is
+	 * `min(thresholdTokens, window − reservedCompletionTokens − this)`, so a target
+	 * set closer to the window than this reserve comes earlier, by at most this
+	 * reserve.
+	 *
+	 * It is deliberately a CUSHION and never the trigger restated. Writing
+	 * `window − thresholdTokens` here would collapse the parent's second ceiling to
+	 * `thresholdTokens − reservedCompletionTokens`, subtracting the routed output
+	 * reservation twice; see `lockThreshold`.
 	 */
 	reserveTokens: Volatile<number | undefined>
 	/** The static rollover template emitted at a rollover boundary. */
@@ -248,7 +257,7 @@ export const Config: Schema<ResolvedConfigValues, Config> = Schema.object({
 		.min(THRESHOLD_TOKENS_UNSET)
 		.default(THRESHOLD_TOKENS_UNSET)
 		.description(
-			'Absolute token count at which a rollover becomes eligible, or -1 to follow thresholdRatio. Absolute wins over the ratio.',
+			'Absolute token count at which a rollover becomes eligible, or -1 to follow thresholdRatio. Absolute wins over the ratio; the trigger is capped at the window less the routed output reservation and reserveTokens.',
 		).volatile(),
 	keepRecentTokens: Schema.number()
 		.min(1)
@@ -259,7 +268,7 @@ export const Config: Schema<ResolvedConfigValues, Config> = Schema.object({
 	reserveTokens: Schema.number()
 		.min(0)
 		.description(
-			'Reserve held back below the rollover trigger, in tokens. Leave blank for the default: 15% of the model window, never below 16384.',
+			'Reserve held back below the rollover trigger, in tokens. Leave blank for the default: 15% of the model window, never below 16384. The trigger is the lower of your target and the window less the routed output reservation and this reserve.',
 		).volatile(),
 	rolloverText: Schema.string().default(DEFAULT_ROLLOVER_TEMPLATE).description('Static rollover template text.').volatile(),
 	notebookSummaryMaxChars: Schema.number()

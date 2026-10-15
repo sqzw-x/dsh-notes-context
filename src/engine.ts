@@ -453,8 +453,33 @@ export class NotesCompactionEngine extends BasicCompactionEngine {
 	 * only resolvable at runtime. So the ratio is computed here, once per routed
 	 * target, and swapped into the base backend's resolved config — the same
 	 * object reference the backend re-reads on every step, so the very next
-	 * pressure check uses it. `headroomTokens` is derived from the same number so
-	 * the reserve cannot clamp the trigger the user asked for.
+	 * pressure check uses it.
+	 *
+	 * ## The headroom is a cushion, never the trigger restated
+	 *
+	 * `headroomTokens` is written as the reserve itself — the same
+	 * `max(15% of window, 16384)` derivation `reserveTokens` documents — and
+	 * **never** as `window − desired`. The difference is not cosmetic. The base
+	 * backend clamps the trigger with, in `messageBudgetTokens = contextWindow −
+	 * reservedCompletionTokens`,
+	 *
+	 * ```
+	 * thresholdTokens = floor(min(contextWindow × thresholdRatio,
+	 *                           messageBudgetTokens − headroomTokens))
+	 * ```
+	 *
+	 * A headroom of `window − desired` therefore collapses the second ceiling to
+	 * `desired − reservedCompletionTokens`: the routed request's own output
+	 * reservation is subtracted a second time, and the trigger the profile asked
+	 * for shrinks by exactly that reservation. A `thresholdTokens: 450000` on a
+	 * 1,000,000-token window whose request reserves 393,216 tokens for output
+	 * fires at 56,784 — 5.7% of the window — rather than 450,000. Writing the
+	 * reserve keeps each ceiling on its own quantity, and the effective trigger is
+	 * then `min(desired, messageBudgetTokens − reserve)`: the point the profile
+	 * asked for, or the latest point the window can hold when the routed output
+	 * reservation leaves less than that. The shortfall is bounded by the reserve,
+	 * so a target set too close to the window comes earlier by at most the
+	 * cushion.
 	 *
 	 * The base config object is deeply frozen, so assignments into it cannot
 	 * work; the reference itself is what gets replaced.
@@ -483,10 +508,19 @@ export class NotesCompactionEngine extends BasicCompactionEngine {
 		const next = {
 			...this.config,
 			thresholdRatio: desired / contextWindow,
-			headroomTokens: Math.max(0, contextWindow - desired),
+			/* The cushion, NOT `contextWindow - desired`. See the module docblock
+			 * above: the parent subtracts the routed output reservation and this
+			 * headroom from the same window, so restating the trigger here
+			 * subtracts the reservation twice. */
+			headroomTokens: reserve,
 		}
 		;(this as { config: unknown }).config = next
-		this.ctx.logger.debug('notes-context: rollover trigger locked at %d tokens (window %d)', desired, contextWindow)
+		this.ctx.logger.debug(
+			'notes-context: rollover trigger requested at %d tokens (window %d, reserve %d)',
+			desired,
+			contextWindow,
+			reserve,
+		)
 		this.lockedTarget = key
 		return true
 	}

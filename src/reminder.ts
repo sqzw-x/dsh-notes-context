@@ -247,7 +247,14 @@ async function planReminder(
 				 * the lock is a no-op without `thresholdTokens`. */
 				lockAbsoluteTrigger(ctx, contextWindow, routed)
 			}
-			const policy = readPressurePolicy(source, routed.provider, routed.model)
+			/* Re-read the policy: the lock above replaced the engine's resolved
+			 * config with one carrying this window's ratio, and the band must
+			 * derive from the number the backend will actually judge. The
+			 * snapshot taken before the lock predates that replacement, so using
+			 * it would schedule a window's reminder against the configured
+			 * default ratio — far above the locked trigger, and therefore never
+			 * delivered before the rollover it is meant to precede. */
+			const policy = readPressurePolicy(mountedPolicySource(ctx) ?? source, routed.provider, routed.model)
 			state.thresholdTokens =
 				contextWindow === undefined
 					? undefined

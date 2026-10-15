@@ -75,7 +75,13 @@ The commonly used keys are below. All fields are on the settings page; derivatio
 |---|---|---|
 | `thresholdTokens` | `-1` | Compaction trigger. An absolute count wins: `450000` means 450K regardless of model. `-1` uses the `thresholdRatio` instead |
 | `keepRecentTokens` | `20000` | Upper bound on retained text after a rollover, absolute. The real tail is larger, because selection works on whole messages |
-| `reserveTokens` | blank | Reserve below the trigger. Blank means 15% of the window, never below 16384 |
+| `reserveTokens` | blank | Reserve below the trigger. Blank means 15% of the window, never below 16384. A target set closer to the window than this reserve comes earlier by at most the reserve |
+
+**The trigger is the lower of two ceilings**: `min(target, window − routed output
+reservation − reserve)`. A provider that declares `maxTokens` — the pi-ai family — spends
+about four tenths of the window on that reservation, so a high target is held by that
+ceiling. That is the window's physical limit, not a configuration error; to land a target
+exactly, lower `reserveTokens`.
 | `reminderEnabled` | `true` | Whether the reminder is injected |
 
 **The reminder position has no key.** It is derived from the trigger:
