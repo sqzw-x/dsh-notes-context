@@ -48,7 +48,8 @@
     "rollover"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "dsh": ">=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.2 <0.3.0-0"
   },
   "scripts": {
     "build": "tsdown",
@@ -63,7 +64,8 @@
     },
     "compatibility": {
       "dshReleases": {
-        "0.2.0-rc.2": "compatible"
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.2": "compatible"
       }
     },
     "client": {

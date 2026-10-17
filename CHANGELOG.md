@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **兼容声明**：`package.json` 增加 `engines.dsh`，覆盖已实测的 `0.2.0-rc.2` 与 `0.2.1-rc.2`；插件市场和新版本 DSH 会据此显示/校验兼容性。
+
 ## 0.2.0
 
 The compaction fields follow omp's names and units, and the absolute rollover trigger no

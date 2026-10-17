@@ -146,18 +146,24 @@ npm test
 
 ## Publishing
 
-Pushing a `v*` tag publishes to npm through GitHub Actions (the tag must match the
-`package.json` version). Tag the current version for the first release; use `npm version`
-after that:
+Releases use npm **Trusted Publishing** (OIDC); the workflow needs no long-lived `NPM_TOKEN`.
+
+1. **First release**: `dsh-notes-context` does not exist on npm yet. Publish once locally (`npm login` then `npm publish --access public`) or with a one-off token in CI; this creates the package and its ownership.
+2. On npmjs.com open the package → **Settings → Trusted publishing** and add GitHub Actions:
+   - Organization or user: `sqzw-x`
+   - Repository: `dsh-notes-context`
+   - Workflow filename: `publish.yml`
+   - Allowed actions: enable **npm publish** (`npm stage publish` is always allowed)
+3. After that, push a `v*` tag matching the `package.json` version; `.github/workflows/publish.yml` publishes over OIDC. A new configuration must complete one successful publish within **2 days** or it expires; if 0.2.0 was published manually, `npm version patch` to 0.2.1 and tag that.
+4. Once verified, delete any `NPM_TOKEN` and set the package's Publishing access to “Require two-factor authentication and disallow tokens”.
 
 ```sh
-git tag "v$(node -pe 'require("./package.json").version')" && git push origin --tags   # first release
-npm version patch && git push --follow-tags                                            # afterwards
-```
+# If the first version was already published manually: bump and verify via CI
+npm version patch && git push --follow-tags
 
-The first publish needs an `NPM_TOKEN` secret (an npm granular access token with
-read/write package permission) in the repository settings. npm Trusted Publishing is an
-alternative; the workflow then needs no long-lived token.
+# Later releases
+git tag "v$(node -pe 'require("./package.json").version')" && git push origin --tags
+```
 
 ## License
 

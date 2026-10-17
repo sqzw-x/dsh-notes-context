@@ -39,7 +39,6 @@ jobs:
         run: npm pack --dry-run
       - name: 发布
         # 打标签时发布；手动触发只在 dry-run 时校验与打包，不发。
+        # 使用 npm Trusted Publishing（OIDC），不需要 NPM_TOKEN。
         if: ${{ github.event_name == 'push' }}
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
