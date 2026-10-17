@@ -107,8 +107,17 @@ rollover.
 ## Install
 
 ```sh
-dsh plugin --profile <profile> add ./packages/dsh-notes-context
+# From npm (after release: prebuilt, no local build)
+dsh plugin --profile <profile> add dsh-notes-context
 dsh --profile <profile> --dump-config   # confirm both rows applied
+```
+
+Installing from the GitHub source also works, but pnpm will ask you to allow the
+package's build script (`prepack` produces `lib/`). Add the `allowBuilds` entry
+pnpm prints to the profile's `pnpm-workspace.yaml`, then retry:
+
+```sh
+dsh plugin --profile <profile> add github:sqzw-x/dsh-notes-context
 ```
 
 The bundle contains two patch rows: it disables `compaction-basic` and mounts this package.
@@ -129,7 +138,7 @@ The bundle contains two patch rows: it disables `compaction-basic` and mounts th
 ## Development
 
 ```sh
-cd packages/dsh-notes-context
+npm ci
 npm run typecheck
 npm run build
 npm test
@@ -138,15 +147,17 @@ npm test
 ## Publishing
 
 Pushing a `v*` tag publishes to npm through GitHub Actions (the tag must match the
-`package.json` version):
+`package.json` version). Tag the current version for the first release; use `npm version`
+after that:
 
 ```sh
-npm version patch          # or minor / major; tags as well
-git push --follow-tags
+git tag "v$(node -pe 'require("./package.json").version')" && git push origin --tags   # first release
+npm version patch && git push --follow-tags                                            # afterwards
 ```
 
-The first publish needs an `NPM_TOKEN` secret (an npm Automation token) in the repository
-settings.
+The first publish needs an `NPM_TOKEN` secret (an npm granular access token with
+read/write package permission) in the repository settings. npm Trusted Publishing is an
+alternative; the workflow then needs no long-lived token.
 
 ## License
 

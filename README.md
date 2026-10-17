@@ -91,8 +91,15 @@ lead = min(32000, max(8192, floor(压缩阈值 × 0.125)))
 ## 安装
 
 ```sh
-dsh plugin --profile <profile> add ./packages/dsh-notes-context
+# 从 npm 安装（发布后；预构建，无需本地构建）
+dsh plugin --profile <profile> add dsh-notes-context
 dsh --profile <profile> --dump-config   # 确认两层都生效
+```
+
+从 GitHub 源码安装也可以，但 pnpm 会要求允许本包运行构建脚本（`prepack` 生成 `lib/`）；把 pnpm 提示的 `allowBuilds` 条目写进 profile 的 `pnpm-workspace.yaml` 后重试：
+
+```sh
+dsh plugin --profile <profile> add github:sqzw-x/dsh-notes-context
 ```
 
 组合包含两行 patch：停用 `compaction-basic`，挂载本包。
@@ -108,7 +115,7 @@ dsh --profile <profile> --dump-config   # 确认两层都生效
 ## 开发
 
 ```sh
-cd packages/dsh-notes-context
+npm ci
 npm run typecheck
 npm run build
 npm test
@@ -116,14 +123,14 @@ npm test
 
 ## 发布
 
-打 `v*` 标签触发 GitHub Actions 发布到 npm（标签版本须与 `package.json` 一致）：
+打 `v*` 标签触发 GitHub Actions 发布到 npm（标签版本须与 `package.json` 一致）。首次发布直接给当前版本打标签，之后用 `npm version`：
 
 ```sh
-npm version patch          # 或 minor / major，同时打标签
-git push --follow-tags
+git tag "v$(node -pe 'require("./package.json").version')" && git push origin --tags   # 首次
+npm version patch && git push --follow-tags                                            # 之后（或 minor / major）
 ```
 
-首次发布前需在仓库 Settings → Secrets 配置 `NPM_TOKEN`（npm 的 Automation token）。
+首次发布前需在仓库 Settings → Secrets and variables → Actions 配置 `NPM_TOKEN`（npm granular access token，勾选 read/write 包权限）；也可以改用 npm Trusted Publishing，此时工作流里不需要长期 token。
 
 ## 许可
 
